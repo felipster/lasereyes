@@ -17,3 +17,4 @@ led_channel = pca.channels[0]
 led_channel.duty_cycle = 0xffff, full brightnss
 # check i2c connections: sudo i2cdetect -y 1
 # Implementing Extended Kalman Filter for orientation correction, optimal guidance for target tracking, and train yolov7 for laser dot recognition? Will use azimuth elevetion state (or potentially pitch yaw euler angles?) for each eye, where they are mirror images of eachother -- take advantage of this
+# lets find limits of eye motion:
