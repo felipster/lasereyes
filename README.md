@@ -1,4 +1,4 @@
-# lasereyes
+# lasereyes bitch
 # This project uses a raspberry pi 5 with a camera module v3, the rpi ai kit with the M.2 Hat+, and an adafruit PCA9685 16 Channel servo driver, which drives the 6 servos and (maybe) two HiLetgo 5V 650nm 5mW red diode laser beams. 
 # Here is a final setup of the hardware:
 # insert foto
