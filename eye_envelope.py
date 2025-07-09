@@ -28,14 +28,14 @@ if __name__ == '__main__':
     set_initials(servo_limits, kit)
 
     # right eye
-    az_chan = 1
-    el_chan = 4
-    loop_thru_azEl(servo_limits[az_chan,:], servo_limits[el_chan,:], az_chan, el_chan, kit)
+    az_chan_r = 1
+    el_chan_r = 4
+    loop_thru_azEl(servo_limits[az_chan_r,:], servo_limits[el_chan_r,:], az_chan_r, el_chan_r, kit)
 
     # left eye
-    az_chan = 2
-    el_chan = 0
-    loop_thru_azEl(servo_limits[az_chan,:], servo_limits[el_chan,:], az_chan, el_chan, kit)
+    az_chan_l = 2
+    el_chan_l = 0
+    loop_thru_azEl(servo_limits[az_chan_l,:], servo_limits[el_chan,:], az_chan_l, el_chan_l, kit)
 
     set_initials(servo_limits,kit)
 
