@@ -70,3 +70,25 @@ def set_initials(servo_limits, kit):
     kit.servo[3].angle = servo_limits[3,1]
     kit.servo[4].angle = (servo_limits[4,1] - servo_limits[4,0] )/2 + servo_limits[4,0] # right az
     kit.servo[5].angle = servo_limits[5,1]
+
+if __name__ == '__main__':
+    i2c = busio.I2C(board.SCL, board.SDA)
+    pca = adafruit_pca9685.PCA9685(i2c)
+    servo_channels = pca.channels[0:7]
+    kit =ServoKit(channels=16)
+
+
+    # set initial values of eyes and eyelids
+    set_initials(servo_limits, kit)
+
+    # right eye
+    az_chan = 1
+    el_chan = 4
+    loop_thru_azEl(servo_limits[az_chan,:], servo_limits[el_chan,:], az_chan, el_chan, kit)
+
+    # left eye
+    az_chan = 2
+    el_chan = 0
+    loop_thru_azEl(servo_limits[az_chan,:], servo_limits[el_chan,:], az_chan, el_chan, kit)
+
+    set_initials(servo_limits,kit)
