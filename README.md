@@ -56,3 +56,18 @@ check i2c connections:
  heres a cool command to see pose estimation on rpi
  
  `python basic_pipelines/pose_estimation.py --input rpi --frame-rate 10`
+
+ the plan moving forward is to use ultranalytics YOLO11-pose model as a pretrained model, and then add on two more "keypoints" representing each laser of the eyes. Documentation can be found here https://docs.ultralytics.com/tasks/pose/, and their GitHub here https://github.com/ultralytics/ultralytics/ 
+
+ Using our new images created with the lasers, add these images into the training set and train the model with the weights preloaded. you should not train it on the RPI!:
+ ```python
+ from ultralytics import YOLO
+
+  # Load a model
+  model = YOLO("yolo11n-pose.yaml")  # build a new model from YAML
+  model = YOLO("yolo11n-pose.pt")  # load a pretrained model (recommended for training)
+  model = YOLO("yolo11n-pose.yaml").load("yolo11n-pose.pt")  # build from YAML and transfer weights
+
+  # Train the model
+  results = model.train(data="coco8-pose-with-laser-images-added.yaml", epochs=100, imgsz=640)
+  ```
