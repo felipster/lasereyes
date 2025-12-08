@@ -11,8 +11,8 @@ import time
 # AND KEEP THE POINT OF WHERE THE HINGES ARE CONNECTED CONSTANT OR YOU'LL HAVE TO REPEAT THIS ASS PROCESS
 servo_limits = np.array([[34,80], #  0 left elevation
                         [64,132], #  1 left azimuth
-                        [0,45], #  2 right elevation
-                        [0,90], #  3 right azimuth
+                        [0,43], #  2 right elevation
+                        [32,122], #  3 right azimuth
                         [60, 90], # 4 top eyelids
                         [120, 150]]) # 5 bottom eyelids
 print(servo_limits)
@@ -23,7 +23,7 @@ print(servo_limits)
 def loop_thru_azEl(az_limits, el_limits, az_chan, el_chan, kit):
     # switching logic
     going_up = True
-    lag = 1e-2
+    lag = 1e-3
 
     for az in range(az_limits[0],az_limits[1]):
         kit.servo[az_chan].angle = az
@@ -46,8 +46,8 @@ def set_initials(servo_limits, kit):
     # set initial values of eyes and eyelids
     kit.servo[0].angle = (servo_limits[0,1] - servo_limits[0,0] )/2 + servo_limits[0,0] # left el
     kit.servo[1].angle = (servo_limits[1,1] - servo_limits[1,0] )/2 + servo_limits[1,0]  # right az
-    kit.servo[2].angle = (servo_limits[2,1] - servo_limits[2,0] )/2 + servo_limits[2,0]  # left az
-    kit.servo[3].angle = (servo_limits[3,1] - servo_limits[3,0] )/2 + servo_limits[3,0] # right az
+    kit.servo[2].angle = (servo_limits[2,1] - servo_limits[2,0] )/2 + servo_limits[2,0] -5# left az
+    kit.servo[3].angle = (servo_limits[3,1] - servo_limits[3,0] )/2 + servo_limits[3,0] +5# right az
     kit.servo[4].angle = servo_limits[4,1]
     kit.servo[5].angle = servo_limits[5,1]
 
