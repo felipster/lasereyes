@@ -1,8 +1,8 @@
 # lasereyes bitch
 # Hardware
- This project uses a raspberry pi 5 with a camera module v3, the rpi ai kit with the M.2 Hat+, and an adafruit PCA9685 16 Channel servo driver, which drives the 6 servos and two HiLetgo 5V 650nm 5mW red diode laser beams. 
+ This project uses a raspberry pi 5 with a camera module v3, the rpi ai kit with the M.2 Hat+, and an adafruit PCA9685 16 Channel servo driver, which drives the 6 servos and two HiLetgo 5V 650nm 5mW red diode laser beams. 3D print files can be found under ./3d_print, and was highly influenced by Will Cogley's eye mech δ1.0 design, but this will probably change soon, because the field of view is honestly so ass. Link to Will Cogley's design found at https://willcogley.notion.site/Will-Cogley-Project-Archive-75a4864d73ab4361ab26cabaadaec33a?p=fee129fa32a443749f88524f53702f5a&pm=c 
 ## Here is a final setup of the hardware:
-insert foto
+![Alt text](images/hardware_set_up.jpg)
 # Helpful Documentation
 ## Raspberry Pi
  Setup for the Raspberry pi 5, camera module v3, and rpi ai kit can all be found at https://www.raspberrypi.com/documentation/
@@ -54,7 +54,7 @@ check i2c connections:
 
 ## Pose Estimation
  heres a cool command to see pose estimation on rpi
- 
+
  `python basic_pipelines/pose_estimation.py --input rpi --frame-rate 10`
 
  the plan moving forward is to use ultranalytics YOLO11-pose model as a pretrained model, and then add on two more "keypoints" representing each laser of the eyes. Documentation can be found here https://docs.ultralytics.com/tasks/pose/, and their GitHub here https://github.com/ultralytics/ultralytics/ 
