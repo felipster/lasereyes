@@ -71,3 +71,64 @@ check i2c connections:
   # Train the model
   results = model.train(data="coco8-pose-with-laser-images-added.yaml", epochs=100, imgsz=640)
   ```
+
+# Closed-Loop Laser Eye Tracking: OOP Architecture Design
+
+## High-Level System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│         LaseEyeController (Main Command & Control)          │
+│  - Orchestrates all subsystems                              │
+│  - Manages loop cycle (inference → tracking → servo update) │
+└────────┬─────────────────────┬──────────────────────────────┘
+         │                     │
+    ┌────▼─────┐         ┌────▼──────────────┐
+    │ServoCtrl  │         │  PoseDetector    │
+    │- Write to │         │  - Runs YOLO11   │
+    │  servos   │         │  - Extracts eyes │
+    │- Manage   │         │  - Face keypts   │
+    │  limits   │         │  - Normalizes    │
+    └────┬─────┘         └────┬──────────────┘
+         │                     │
+    ┌────┴──────────────────────┴─────────────┐
+    │                                          │
+    │     ┌──────────────────────────────┐    │
+    │     │   LaserDetector              │    │
+    │     │  - Processes frame for laser │    │
+    │     │  - Detects red dots          │    │
+    │     │  - Returns (x, y) positions  │    │
+    │     └──────────────────────────────┘    │
+    │                                          │
+    │     ┌──────────────────────────────┐    │
+    │     │   TrackingController         │    │
+    │     │  - Multi-target tracking     │    │
+    │     │  - Kalman filtering          │    │
+    │     │  - Error calculation         │    │
+    │     │  - Command generation        │    │
+    │     └──────────────────────────────┘    │
+    │                                          │
+    └──────────────────────────────────────────┘
+
+Main Loop (in LaseEyeController):
+    while True:
+        frame = camera.capture()
+        
+        # 1. Detect target (human eyes)
+        target_eyes = pose_detector.detect(frame)
+        
+        # 2. Detect achieved laser position
+        laser_dots = laser_detector.detect(frame)
+        
+        # 3. Track and compute error
+        commands = tracking_controller.update(
+            target_eyes, 
+            laser_dots, 
+            dt
+        )
+        
+        # 4. Execute servo commands
+        servo_controller.set_angles(commands)
+        
+        dt = time.time() - start_time
+```
