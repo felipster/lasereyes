@@ -7,10 +7,10 @@ from typing import Optional
 import time
 import numpy as np
 import cv2
-from .servo_controller import ServoController
-from .pose_detector import PoseDetector
-from .laser_detector import LaserDetector
-from .tracking_controller import TrackingController
+from .src.servo_controller import ServoController
+from .src.pose_detector import PoseDetector
+from .src.laser_detector import LaserDetector
+from .src.tracking_controller import TrackingController
 
 
 class LaserEyeController:
