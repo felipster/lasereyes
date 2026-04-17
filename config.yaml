@@ -10,7 +10,7 @@ loop_rate_hz: 30  # Target update frequency (Hz)
 # Model Paths
 # ============================================================================
 models:
-  pose: "path/to/yolo11n-pose-5kpt.pt"      # Trained 5-keypoint face detection model
+  pose: "yolo/yolo11n-pose.pt"      # Trained 5-keypoint face detection model
   laser: "path/to/laser_detector_best.pt"   # Trained laser dot detection model
 
 # ============================================================================
@@ -31,12 +31,12 @@ models:
 # Channels: [0] LEFT_ELEVATION, [1] LEFT_AZIMUTH, [2] RIGHT_ELEVATION, 
 #           [3] RIGHT_AZIMUTH, [4] TOP_EYELID, [5] BOTTOM_EYELID
 servo_limits:
-  - [-22.5, 22.5]   # LEFT_ELEVATION
-  - [-30.0, 30.0]   # LEFT_AZIMUTH
-  - [-22.5, 22.5]   # RIGHT_ELEVATION
-  - [-30.0, 30.0]   # RIGHT_AZIMUTH
-  - [0.0, 90.0]     # TOP_EYELID
-  - [0.0, 90.0]     # BOTTOM_EYELID
+  - [34,80]   # LEFT_ELEVATION
+  - [64,132]   # LEFT_AZIMUTH
+  - [0,43]   # RIGHT_ELEVATION
+  - [32,122]   # RIGHT_AZIMUTH
+  - [60, 90]     # TOP_EYELID
+  - [120, 150]     # BOTTOM_EYELID
 
 # ============================================================================
 # PID Controller Gains
