@@ -11,8 +11,6 @@ loop_rate_hz: 30  # Target update frequency (Hz)
 # ============================================================================
 models:
   pose: "yolo/yolo11n-pose.pt"      # Trained 5-keypoint face detection model
-  laser: "path/to/laser_detector_best.pt"   # Trained laser dot detection model
-
 # ============================================================================
 # Camera Calibration
 # ============================================================================
@@ -90,6 +88,6 @@ camera:
 # Logging
 # ============================================================================
 logging:
-  verbose: false
-  save_frames: false
-  frame_output_dir: "/tmp/laser_eyes_frames/"
+  verbose: true
+  save_frames: true
+  frame_output_dir: "./output/laser_eyes_frames/"

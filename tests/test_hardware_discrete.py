@@ -399,7 +399,7 @@ def main():
                         help='Camera device ID')
     parser.add_argument('--frames', type=int, default=10,
                         help='Number of frames to test')
-    parser.add_argument('--pose-model', type=str, default='yolo11n-pose-5kpt.pt',
+    parser.add_argument('--pose-model', type=str, default='yolo/yolo11n-pose.pt',
                         help='Path to pose model')
     parser.add_argument('--verbose', action='store_true', default=True,
                         help='Verbose output')

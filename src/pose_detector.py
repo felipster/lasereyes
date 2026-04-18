@@ -22,7 +22,7 @@ class PoseDetector:
     CHIN = 3
     FOREHEAD = 4
     
-    def __init__(self, model_path: str = "yolo11n-pose-5kpt.pt", 
+    def __init__(self, model_path: str = "yolo/yolo11n-pose.pt", 
                  conf_threshold: float = 0.5,
                  camera_matrix: Optional[np.ndarray] = None):
         """

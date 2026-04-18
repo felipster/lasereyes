@@ -20,6 +20,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 from collections import deque
+import pdb
 
 from src.laser_detector import LaserDetector
 
@@ -54,7 +55,7 @@ class LaserDetectionVisualizer:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         cap.set(cv2.CAP_PROP_FPS, 30)
-        
+        pdb.set_trace()
         if not cap.isOpened():
             print("[ERROR] Camera not available")
             return
