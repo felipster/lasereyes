@@ -23,11 +23,11 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from servo_controller import ServoController
-from laser_detector import LaserController, LaserDetector
-from pose_detector import PoseDetector
+from src.servo_controller import ServoController
+from src.laser_detector import LaserController, LaserDetector
+from src.pose_detector import PoseDetector
 
 
 class HardwareTests:

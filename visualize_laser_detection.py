@@ -21,16 +21,7 @@ import cv2
 from pathlib import Path
 from collections import deque
 
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
-
-from laser_detector import LaserDetector
-
-try:
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+from src.laser_detector import LaserDetector
 
 
 class LaserDetectionVisualizer:
