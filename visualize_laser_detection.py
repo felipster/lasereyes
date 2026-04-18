@@ -20,9 +20,11 @@ import numpy as np
 import cv2
 from pathlib import Path
 from collections import deque
-import pdb
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 from src.laser_detector import LaserDetector
+from src.camera_capture import CameraCapture
 
 
 class LaserDetectionVisualizer:
@@ -51,13 +53,10 @@ class LaserDetectionVisualizer:
     
     def run(self, camera_id: int = 0, max_frames: int = None):
         """Run real-time visualization."""
-        cap = cv2.VideoCapture(camera_id)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        pdb.set_trace()
-        if not cap.isOpened():
-            print("[ERROR] Camera not available")
+        try:
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
             return
         
         print(f"[START] Laser detection visualization ({self.method})")

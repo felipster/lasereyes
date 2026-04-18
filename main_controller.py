@@ -11,6 +11,7 @@ from .src.servo_controller import ServoController
 from .src.pose_detector import PoseDetector
 from .src.laser_detector import LaserDetector
 from .src.tracking_controller import TrackingController
+from .src.camera_capture import CameraCapture
 
 
 class LaserEyeController:
@@ -57,9 +58,11 @@ class LaserEyeController:
             camera_source: OpenCV camera ID (usually 0 for RPi)
             max_frames: Max frames to process (None = infinite)
         """
-        cap = cv2.VideoCapture(camera_source)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        try:
+            cap = CameraCapture(camera_id=camera_source, width=640, height=480, fps=30)
+        except Exception as e:
+            print(f"Error initializing camera: {e}")
+            return
         
         self.running = True
         loop_start = time.time()

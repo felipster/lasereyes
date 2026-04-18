@@ -17,6 +17,7 @@ from src.servo_controller import ServoController
 from src.pose_detector import PoseDetector
 from src.laser_detector import LaserDetector
 from src.tracking_controller import TrackingController
+from src.camera_capture import CameraCapture
 
 
 class LaserEyeControllerStreaming:
@@ -81,10 +82,12 @@ class LaserEyeControllerStreaming:
             camera_source: OpenCV camera ID (usually 0 for RPi)
             max_frames: Max frames to process (None = infinite)
         """
-        cap = cv2.VideoCapture(camera_source)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
+        # Use new camera wrapper instead of cv2.VideoCapture
+        try:
+            cap = CameraCapture(camera_id=camera_source, width=640, height=480, fps=30)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
+            return
         
         self.running = True
         loop_start = time.time()
@@ -96,9 +99,9 @@ class LaserEyeControllerStreaming:
             while self.running:
                 frame_start = time.time()
                 
-                # 1. Capture frame
+                # 1. Capture frame using Picamera2 or fallback
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     print("[ERROR] Failed to read frame")
                     break
                 

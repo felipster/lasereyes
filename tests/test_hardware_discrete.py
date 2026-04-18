@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.servo_controller import ServoController
 from src.laser_detector import LaserController, LaserDetector
 from src.pose_detector import PoseDetector
+from src.camera_capture import CameraCapture
 
 
 class HardwareTests:
@@ -101,16 +102,7 @@ class HardwareTests:
         self.log(f"Testing camera capture (device {camera_id})...")
         
         try:
-            cap = cv2.VideoCapture(camera_id)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            if not cap.isOpened():
-                self.log("✗ Camera not available", "ERROR")
-                self.results['camera'] = False
-                return False
-            
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
             self.log(f"✓ Camera opened (640x480 @ 30fps)")
             
             # Capture frames and gather statistics
@@ -122,7 +114,7 @@ class HardwareTests:
                 ret, frame = cap.read()
                 frame_times.append(time.time() - start)
                 
-                if not ret:
+                if not ret or frame is None:
                     self.log(f"✗ Failed to capture frame {i}", "WARN")
                     break
                 
@@ -173,21 +165,15 @@ class HardwareTests:
             self.log("✓ LaserDetector (HSV) initialized")
             
             # Capture test frames
-            cap = cv2.VideoCapture(camera_id)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            if not cap.isOpened():
-                self.log("✗ Camera not available", "ERROR")
-                self.results['laser_hsv'] = False
-                return False
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+            self.log("✓ Camera opened for HSV test")
             
             detection_times = []
             total_detections = 0
             
             for i in range(num_frames):
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     break
                 
                 # Run detection
@@ -230,20 +216,14 @@ class HardwareTests:
             self.log("✓ LaserDetector (Adaptive) initialized")
             
             # Capture test frames
-            cap = cv2.VideoCapture(camera_id)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            if not cap.isOpened():
-                self.log("✗ Camera not available", "ERROR")
-                self.results['laser_adaptive'] = False
-                return False
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+            self.log("✓ Camera opened for Adaptive test")
             
             detection_times = []
             
             for i in range(num_frames):
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     break
                 
                 start = time.time()
@@ -323,21 +303,15 @@ class HardwareTests:
             detector = PoseDetector(model_path, conf_threshold=0.5)
             self.log("✓ PoseDetector initialized")
             
-            cap = cv2.VideoCapture(camera_id)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            if not cap.isOpened():
-                self.log("✗ Camera not available", "ERROR")
-                self.results['pose'] = False
-                return False
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+            self.log("✓ Camera opened for Pose test")
             
             detection_times = []
             total_detections = 0
             
             for i in range(num_frames):
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     break
                 
                 start = time.time()

@@ -15,7 +15,9 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src.camera_capture import CameraCapture
 
 
 class HSVTuner:
@@ -97,13 +99,10 @@ class HSVTuner:
     
     def run(self, camera_id: int = 0):
         """Run interactive tuner."""
-        cap = cv2.VideoCapture(camera_id)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        
-        if not cap.isOpened():
-            print("[ERROR] Camera not available")
+        try:
+            cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+        except Exception as e:
+            print(f"[ERROR] Camera initialization failed: {e}")
             return
         
         window_name = "HSV Threshold Tuner"
