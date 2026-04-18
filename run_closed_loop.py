@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-run_closed_loop.py: Entry point for laser eye tracking system.
+run_closed_loop.py: Entry point for laser eye tracking system with live streaming.
 
 Usage:
     python3 run_closed_loop.py --config config.yaml
+    python3 run_closed_loop.py --config config.yaml --laser-method hsv --stream
+    python3 run_closed_loop.py --config config.yaml --laser-method adaptive --verbose
 """
 
 import sys
@@ -15,8 +17,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
-from main_controller import LaserEyeController
-from src.servo_controller import ServoController
+from main_controller_streaming import LaserEyeControllerStreaming
 
 
 def load_config(config_path: str) -> dict:
@@ -26,7 +27,9 @@ def load_config(config_path: str) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Laser Eye Tracking System')
+    parser = argparse.ArgumentParser(
+        description='Laser Eye Tracking System with Classical Signal Processing'
+    )
     parser.add_argument('--config', type=str, default='config.yaml',
                         help='Path to config file')
     parser.add_argument('--camera', type=int, default=0,
@@ -35,6 +38,13 @@ def main():
                         help='Maximum frames to process (None = infinite)')
     parser.add_argument('--verbose', action='store_true',
                         help='Print debug information')
+    parser.add_argument('--stream', action='store_true', default=True,
+                        help='Enable camera stream visualization')
+    parser.add_argument('--laser-method', type=str, default='hsv',
+                        choices=['hsv', 'adaptive', 'temporal', 'hybrid'],
+                        help='Laser detection method')
+    parser.add_argument('--no-stream', dest='stream', action='store_false',
+                        help='Disable camera stream visualization')
     
     args = parser.parse_args()
     
@@ -45,9 +55,8 @@ def main():
     # Extract servo limits
     servo_limits = np.array(config['servo_limits'], dtype=np.float32)
     
-    # Extract model paths
+    # Extract model path
     pose_model = config['models']['pose']
-    laser_model = config['models']['laser']
     
     # Optional: Load camera calibration
     camera_matrix = None
@@ -58,24 +67,32 @@ def main():
             camera_matrix = calib_data['camera_matrix']
             print(f"[STARTUP] Loaded camera calibration from {calib_file}")
     
-    # Initialize controller
-    print("[STARTUP] Initializing LaserEyeController...")
-    controller = LaserEyeController(
+    # Initialize controller with streaming
+    print("[STARTUP] Initializing LaserEyeControllerStreaming...")
+    controller = LaserEyeControllerStreaming(
         servo_limits=servo_limits,
         pose_model_path=pose_model,
-        laser_model_path=laser_model,
+        laser_method=args.laser_method,
         camera_matrix=camera_matrix,
         loop_rate_hz=config.get('loop_rate_hz', 30.0),
-        verbose=args.verbose
+        verbose=args.verbose,
+        enable_visualization=args.stream
     )
+    
+    # Print laser detection parameters
+    detector_config = config.get('detectors', {}).get('laser', {})
+    print(f"[STARTUP] Laser Detection Method: {args.laser_method}")
+    print(f"[STARTUP] HSV Ranges: {detector_config.get('hsv_h_min', [0, 170])}-"
+          f"{detector_config.get('hsv_h_max', [10, 180])}")
+    print(f"[STARTUP] Confidence Threshold: {detector_config.get('confidence_threshold', 0.5)}")
     
     # Center eyes to safe position
     print("[STARTUP] Centering eyes...")
     controller.servo_controller.center_eyes()
     
     # Run main loop
-    print(f"[STARTUP] Starting main loop (camera_id={args.camera})...")
-    print("[RUNNING] Press Ctrl+C to stop")
+    print(f"[STARTUP] Starting main loop (camera_id={args.camera}, method={args.laser_method})...")
+    print("[RUNNING] Press 'q' in stream to stop, or Ctrl+C")
     
     try:
         controller.run(
