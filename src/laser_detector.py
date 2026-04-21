@@ -7,12 +7,13 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import cv2
 import time
+import pdb
 
-try:
-    from adafruit_servokit import ServoKit
-    SERVOKIT_AVAILABLE = True
-except ImportError:
-    SERVOKIT_AVAILABLE = False
+from adafruit_servokit import ServoKit
+import board
+import busio
+import adafruit_pca9685
+PCA9685_AVAILABLE = True
 
 
 class LaserController:
@@ -25,32 +26,34 @@ class LaserController:
         Args:
             pca_channel: Channel number (0-15)
         """
-        if not SERVOKIT_AVAILABLE:
-            raise RuntimeError("adafruit_servokit not available")
-        
-        self.kit = ServoKit(channels=16)
-        self.pwm = self.kit.continuous_servo_channels[pca_channel]
+        if not PCA9685_AVAILABLE:
+            raise RuntimeError("adafruit_pca9685 not available")
+
+        self.i2c =  busio.I2C(board.SCL, board.SDA)
+        self.pca = adafruit_pca9685.PCA9685(self.i2c)
+        self.pca.frequency = 60  # Set frequency to 60Hz for LED control
+        self.led_channel = self.pca.channels[pca_channel]
         self.is_on = False
     
     def on(self):
         """Turn laser ON (5V)."""
-        self.pwm.value = 1.0
+        self.led_channel.duty_cycle = 0xffff
         self.is_on = True
     
     def off(self):
         """Turn laser OFF (0V)."""
-        self.pwm.value = -1.0
+        self.led_channel.duty_cycle = 0x0000
         self.is_on = False
     
     def set_brightness(self, brightness: float):
         """
-        Set laser brightness (0.0 = off, 1.0 = full brightness).
+        Set laser brightness (0.0 = off, 0xffff = full brightness).
         
         Args:
-            brightness: 0.0 to 1.0
+            brightness: 0.0 to 0xffff
         """
-        # Map [0, 1] to [-1, 1] range for PWM
-        self.pwm.value = (brightness * 2.0) - 1.0
+
+        self.led_channel = brightness
         self.is_on = brightness > 0.1
 
 
@@ -64,7 +67,8 @@ class LaserDetector:
                  method: str = "hsv",
                  conf_threshold: float = 0.5,
                  use_pulsing: bool = False,
-                 pca_channel: int = 7,
+                 pca_channel1: int = 6,
+                 pca_channel2: int = 7,
                  hsv_h_ranges: Optional[List[Tuple[int, int]]] = None,
                  hsv_s_min: int = 100,
                  hsv_v_min: int = 100):
@@ -82,9 +86,10 @@ class LaserDetector:
         """
         self.method = method
         self.conf_threshold = conf_threshold
+        pdb.set_trace()
         self.use_pulsing = use_pulsing
-        self.pca_channel = pca_channel
-        
+        self.pca_channel1 = pca_channel1
+        self.pca_channel2 = pca_channel2
         # HSV thresholds for red laser (650nm)
         # Red wraps around in HSV: [0-10] and [170-180]
         self.hsv_h_ranges = hsv_h_ranges or [(0, 10), (170, 180)]
@@ -92,10 +97,12 @@ class LaserDetector:
         self.hsv_v_min = hsv_v_min
         
         # Initialize laser controller if pulsing enabled
-        self.laser_controller = None
-        if self.use_pulsing and SERVOKIT_AVAILABLE:
+        self.laser_controller1 = None
+        self.laser_controller2 = None
+        if self.use_pulsing and PCA9685_AVAILABLE:
             try:
-                self.laser_controller = LaserController(pca_channel)
+                self.laser_controller1 = LaserController(pca_channel1)
+                self.laser_controller2 = LaserController(pca_channel2)
             except Exception as e:
                 print(f"[WARNING] Could not initialize laser controller: {e}")
                 self.use_pulsing = False
@@ -135,7 +142,7 @@ class LaserDetector:
         elif self.method == "adaptive":
             detections, debug_info = self._detect_adaptive(frame, debug_info)
         elif self.method == "temporal":
-            if self.use_pulsing and self.laser_controller:
+            if self.use_pulsing and self.laser_controller1 and self.laser_controller2:
                 detections, debug_info = self._detect_temporal(frame, debug_info)
             else:
                 print("[WARNING] Temporal requires pulsing - falling back to HSV")
@@ -218,12 +225,14 @@ class LaserDetector:
         start_time = time.time()
         
         # Pulse laser ON, capture frame
-        self.laser_controller.on()
+        self.laser_controller1.on()
+        self.laser_controller2.on()
         time.sleep(0.01)  # Wait for LED to fully turn on
         frame_on = frame.copy()
         
         # Pulse laser OFF, capture frame
-        self.laser_controller.off()
+        self.laser_controller1.off()
+        self.laser_controller2.off()
         time.sleep(0.01)  # Wait for LED to fully turn off
         frame_off = frame.copy()
         

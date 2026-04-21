@@ -7,18 +7,13 @@ from typing import Tuple, Optional
 import numpy as np
 import cv2
 from pathlib import Path
+import pdb
 
-try:
-    from picamera2 import Picamera2
-    PICAMERA2_AVAILABLE = True
-except ImportError:
-    PICAMERA2_AVAILABLE = False
+from picamera2 import Picamera2
+PICAMERA2_AVAILABLE = True
 
-try:
-    from libcamera import controls
-    LIBCAMERA_AVAILABLE = True
-except ImportError:
-    LIBCAMERA_AVAILABLE = False
+from libcamera import controls
+LIBCAMERA_AVAILABLE = True
 
 
 class PiCamera2Wrapper:
@@ -169,19 +164,6 @@ class CameraCapture:
                 return
             except Exception as e:
                 print(f"[WARNING] Picamera2 failed: {e}")
-        
-        # Fallback to OpenCV VideoCapture
-        try:
-            self.camera = cv2.VideoCapture(camera_id)
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self.camera.set(cv2.CAP_PROP_FPS, fps)
-            
-            if self.camera.isOpened():
-                print("[CAMERA] Using OpenCV VideoCapture (USB/fallback)")
-                return
-        except Exception as e:
-            print(f"[WARNING] OpenCV fallback failed: {e}")
         
         raise RuntimeError("No camera capture method available")
     

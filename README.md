@@ -118,6 +118,18 @@ models:
  Setup up for the Servo driver can be found at https://learn.adafruit.com/adafruit-16-channel-servo-driver-with-raspberry-pi. The script blinkatest.py is used to make sure your rpi is ready for use with the servo driver, which tests that I2C is accesible through adafruit_blinka CircuitPython solution. installing circuit python can be found here: https://learn.adafruit.com/circuitpython-on-raspberrypi-linux/installing-circuitpython-on-raspberry-pi
  
  `pip3 install adafruit-circuitpython-pca9685 and adafruit-circuitpython-servokit`
+## Package dependencies: Ultralytics, picamera2, libcamera, opencv-python
+ Make sure to have picamera2 and libcamera downloaded system wide with: 
+ `sudo apt update | sudo apt install python3-libcamera python3-picamera2`
+ And also system wide dependencies for opencv
+ `sudo apt install build-essential cmake git libgtk-3-dev libavcodec-dev libavformat-dev libswscale-dev`
+ Then create a virtual environment with inherited pckgs
+ `python -m venv --system-site-packages env`
+ Then pip install all libraries
+ `pip install opencv-python ultralytics adafruit-circuitpython-pca9685 adafruit-circuitpython-servokit`
+ Then force upgrade of dependent Support libraries
+ `pip install --upgrade --froce-reinstall simplejpeg`
+
 ## Red Diode Lasers
 1. the red lasers are to operate at less than 20 mA, so must connect a resistor (~ 50 ohms) to PWM output of one of the servo channels which is running at maximum of 25 mA (each channel has 220 ohms added on to its 5V+ supply). max 5V / (220 + 50 Ohms) = 18.5 mA Data from https://learn.adafruit.com/16-channel-pwm-servo-driver/pinouts 
 2. -OR- Just connect to 3v supply from rpi pinout with same resistor

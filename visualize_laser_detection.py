@@ -20,6 +20,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 from collections import deque
+import pdb
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -39,7 +40,11 @@ class LaserDetectionVisualizer:
             max_history: Max frames to keep in history
         """
         self.method = method
-        self.detector = LaserDetector(method=method, conf_threshold=0.3)
+        if method == 'temporal':
+            use_pulsing = True
+        else:
+            use_pulsing = False
+        self.detector = LaserDetector(method=method, conf_threshold=0.3, use_pulsing=use_pulsing)
         
         # History for plots
         self.max_history = max_history

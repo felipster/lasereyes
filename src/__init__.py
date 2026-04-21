@@ -13,6 +13,7 @@ from .pose_detector import PoseDetector
 from .laser_detector import LaserDetector
 from .tracking_controller import TrackingController
 from .pid_controller import PIDController
+from .camera_capture import CameraCapture
 
 __all__ = [
     'ServoController',
@@ -20,4 +21,5 @@ __all__ = [
     'LaserDetector',
     'TrackingController',
     'PIDController',
+    'CameraCapture',
 ]
