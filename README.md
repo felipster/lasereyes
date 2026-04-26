@@ -1,4 +1,4 @@
-# lasereyes bitch
+# lasereyes
 # Hardware
  This project uses a raspberry pi 5 with a camera module v3, the rpi ai kit with the M.2 Hat+, and an adafruit PCA9685 16 Channel servo driver, which drives the 6 servos and two HiLetgo 5V 650nm 5mW red diode laser beams. 3D print files can be found under ./3d_print, and was highly influenced by Will Cogley's eye mech δ1.0 design, but this will probably change soon, because the field of view is honestly so ass. Link to Will Cogley's design found at https://willcogley.notion.site/Will-Cogley-Project-Archive-75a4864d73ab4361ab26cabaadaec33a?p=fee129fa32a443749f88524f53702f5a&pm=c 
 ## Here is a final setup of the hardware:
@@ -120,39 +120,53 @@ models:
  `pip3 install adafruit-circuitpython-pca9685 and adafruit-circuitpython-servokit`
 ## Package dependencies: Ultralytics, picamera2, libcamera, opencv-python
  Make sure to have picamera2 and libcamera downloaded system wide with: 
+
  `sudo apt update | sudo apt install python3-libcamera python3-picamera2`
+ 
  And also system wide dependencies for opencv
+
  `sudo apt install build-essential cmake git libgtk-3-dev libavcodec-dev libavformat-dev libswscale-dev`
+ 
  Then create a virtual environment with inherited pckgs
+ 
  `python -m venv --system-site-packages env`
+ 
  Then pip install all libraries
- `pip install opencv-python ultralytics adafruit-circuitpython-pca9685 adafruit-circuitpython-servokit`
+ 
+ `pip install opencv-python ultralytics adafruit-circuitpython-pca9685 adafruit-circuitpython-servokit adafruit-extended-bus`
+ 
  Then force upgrade of dependent Support libraries
- `pip install --upgrade --froce-reinstall simplejpeg`
+ 
+ `pip install --upgrade --force-reinstall simplejpeg`
 
 ## Red Diode Lasers
 1. the red lasers are to operate at less than 20 mA, so must connect a resistor (~ 50 ohms) to PWM output of one of the servo channels which is running at maximum of 25 mA (each channel has 220 ohms added on to its 5V+ supply). max 5V / (220 + 50 Ohms) = 18.5 mA Data from https://learn.adafruit.com/16-channel-pwm-servo-driver/pinouts 
 2. -OR- Just connect to 3v supply from rpi pinout with same resistor
 
-commands to control channel for diode led
-`import board`
-`import busio`
-`import adafruit_pca9685`
-`i2c = busio.I2C(board.SCL, board.SDA)`
-`pca = adafruit_pca9685.PCA9685(i2c)`
+## DONT FRY YOUR GPIO PINS PLEASEEEE
+SINCE I'm an IDIOT, i fried GPIO pins 2/3 which are the dedicated SDA/SCL pins for I2C on the RPI5. This probably happened when the external power source connection (5V) severed and left the pi powering the servo driver. Using built in health test `pintest` reveals that GPIO pins 2 and 3 fail to write. Luckily there are many GPIO pin pairs that you can use for I2C by changing the /boot/firmware/config.txt file. Adding the following line activates the second configuration of i2c(2) on gpio pins 12 (SDA) and 13 (SCL):
+```bash
+# Enable I2C SDA/SCL on GPIO pins 12/13
+dtoverlay=i2c2-pi5,pins_12_13
+```
 
-Set Frequency of entire pca
-`pca.frequency = 60`
-
-Select which channel for led/diode
-`led_channel = pca.channels[0]`
-
-Set Brightness of diode
-`led_channel.duty_cycle = 0xffff, full brightnss`
+The commands to find the usable I2C pins is slightly different now to control channel for diode led
+```python
+from adafruit_extended_bus import ExtendedI2C as I2C
+from adafruit_pca9685 import PCA9685
+i2c = I2C(2)
+pca = PCA9685(i2c)
+# Set Frequency of entire pca
+pca.frequency = 60
+# Select which channel for led/diode
+led_channel = pca.channels[0]
+# Set Brightness of diode
+led_channel.duty_cycle = 0xffff, full brightnss
+```
 
 ## useful I2C commands
-check i2c connections: 
-`sudo i2cdetect -y 1`
+check i2c connections for i2c(2): 
+`sudo i2cdetect -y 2`
 
 # IDEAS:
  Implementing Extended Kalman Filter for orientation correction, optimal guidance for target tracking, and train yolov7 for laser dot recognition? Will use azimuth elevetion state (or potentially pitch yaw euler angles?) for each eye, where they are mirror images of eachother -- take advantage of this

@@ -63,15 +63,13 @@ class PiCamera2Wrapper:
             frame_bgr: Frame in BGR format (OpenCV standard)
         """
         try:
-            # Capture frame in RGB format
+            # Capture frame - format depends on camera configuration
             request = self.camera.capture_request()
-            rgb_frame = request.make_array("main")
+            frame = request.make_array("main")
             request.release()
             
-            # Convert RGB to BGR (OpenCV format)
-            bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
-            
-            return True, bgr_frame
+            # RGB888 from Picamera2 is converted to BGR in the .make_array() call, so we can return it directly
+            return True, frame
             
         except Exception as e:
             print(f"[ERROR] Failed to capture frame: {e}")

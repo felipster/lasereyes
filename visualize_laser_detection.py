@@ -11,6 +11,7 @@ Displays:
 Usage:
     python3 visualize_laser_detection.py --camera 0 --method hsv
     python3 visualize_laser_detection.py --camera 0 --method adaptive
+    python3 visualize_laser_detection.py --camera 0 --method bgr
 """
 
 import sys
@@ -44,7 +45,7 @@ class LaserDetectionVisualizer:
             use_pulsing = True
         else:
             use_pulsing = False
-        self.detector = LaserDetector(method=method, conf_threshold=0.3, use_pulsing=use_pulsing)
+        self.detector = LaserDetector(method=method, conf_threshold=0.3, use_pulsing=use_pulsing,pca_channel1=6, pca_channel2=7)
         
         # History for plots
         self.max_history = max_history
@@ -157,6 +158,10 @@ class LaserDetectionVisualizer:
             mask = debug_info['adaptive_mask']
             mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
             canvas[:height, width:] = mask_color
+        elif 'bgr_mask' in debug_info:
+            mask = debug_info['bgr_mask']
+            mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            canvas[:height, width:] = mask_color
         
         # 3. Info panel
         panel_y = height
@@ -265,7 +270,7 @@ def main():
     parser.add_argument('--camera', type=int, default=0,
                         help='Camera device ID')
     parser.add_argument('--method', type=str, default='hsv',
-                        choices=['hsv', 'adaptive', 'temporal', 'hybrid'],
+                        choices=['hsv', 'adaptive', 'bgr', 'temporal', 'hybrid'],
                         help='Detection method')
     parser.add_argument('--max-frames', type=int, default=None,
                         help='Maximum frames to process')

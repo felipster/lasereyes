@@ -10,9 +10,8 @@ import time
 import pdb
 
 from adafruit_servokit import ServoKit
-import board
-import busio
-import adafruit_pca9685
+from adafruit_extended_bus import ExtendedI2C as I2C
+from adafruit_pca9685 import PCA9685
 PCA9685_AVAILABLE = True
 
 
@@ -29,9 +28,9 @@ class LaserController:
         if not PCA9685_AVAILABLE:
             raise RuntimeError("adafruit_pca9685 not available")
 
-        self.i2c =  busio.I2C(board.SCL, board.SDA)
-        self.pca = adafruit_pca9685.PCA9685(self.i2c)
-        self.pca.frequency = 60  # Set frequency to 60Hz for LED control
+        self.i2c = I2C(2)
+        self.pca = PCA9685(self.i2c, address=0x40)
+        self.pca.frequency = 50  # Set frequency to 60Hz for LED control
         self.led_channel = self.pca.channels[pca_channel]
         self.is_on = False
     
@@ -65,13 +64,13 @@ class LaserDetector:
     
     def __init__(self, 
                  method: str = "hsv",
-                 conf_threshold: float = 0.5,
+                 conf_threshold: float = 0.8,
                  use_pulsing: bool = False,
                  pca_channel1: int = 6,
                  pca_channel2: int = 7,
                  hsv_h_ranges: Optional[List[Tuple[int, int]]] = None,
-                 hsv_s_min: int = 100,
-                 hsv_v_min: int = 100):
+                 hsv_s_min: int = 50,
+                 hsv_v_min: int = 50):
         """
         Initialize laser detector with HSV thresholding.
         
@@ -86,7 +85,6 @@ class LaserDetector:
         """
         self.method = method
         self.conf_threshold = conf_threshold
-        pdb.set_trace()
         self.use_pulsing = use_pulsing
         self.pca_channel1 = pca_channel1
         self.pca_channel2 = pca_channel2
@@ -101,8 +99,8 @@ class LaserDetector:
         self.laser_controller2 = None
         if self.use_pulsing and PCA9685_AVAILABLE:
             try:
-                self.laser_controller1 = LaserController(pca_channel1)
-                self.laser_controller2 = LaserController(pca_channel2)
+                self.laser_controller1 = LaserController(pca_channel=self.pca_channel1)
+                self.laser_controller2 = LaserController(pca_channel=self.pca_channel2)
             except Exception as e:
                 print(f"[WARNING] Could not initialize laser controller: {e}")
                 self.use_pulsing = False
@@ -141,6 +139,8 @@ class LaserDetector:
             detections, debug_info = self._detect_hsv(frame, debug_info)
         elif self.method == "adaptive":
             detections, debug_info = self._detect_adaptive(frame, debug_info)
+        elif self.method == "bgr":
+            detections, debug_info = self._detect_bgr(frame, debug_info)
         elif self.method == "temporal":
             if self.use_pulsing and self.laser_controller1 and self.laser_controller2:
                 detections, debug_info = self._detect_temporal(frame, debug_info)
@@ -167,6 +167,13 @@ class LaserDetector:
         # Convert to HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
+        # Debug: sample HSV and BGR values from center of frame to diagnose color issues
+        if self.frame_count % 30 == 0:  # Print every 30 frames
+            h, w = frame.shape[:2]
+            center_bgr = frame[h//2, w//2]
+            center_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[h//2, w//2]
+            print(f"[DEBUG] Center pixel BGR={center_bgr} HSV={center_hsv} | Frame: {self.frame_count}")
+        
         # Create mask for red (two ranges due to HSV wrapping)
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
         for h_min, h_max in self.hsv_h_ranges:
@@ -174,13 +181,17 @@ class LaserDetector:
             upper = np.array([h_max, 255, 255])
             mask |= cv2.inRange(hsv, lower, upper)
         
+        # Debug: show mask statistics
+        mask_pixels = np.count_nonzero(mask)
+        debug_info['mask_pixel_count'] = mask_pixels
+        
         # Morphological operations to reduce noise
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
         # Find contours
-        detections = self._contours_to_detections(mask, frame)
+        detections = self._contours_to_detections(mask, frame, hsv)
         
         debug_info['hsv_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
@@ -192,8 +203,9 @@ class LaserDetector:
         """Adaptive thresholding for variable lighting."""
         start_time = time.time()
         
-        # Convert to grayscale
+        # Convert to grayscale and HSV (for debug)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
         # Adaptive threshold
         mask = cv2.adaptiveThreshold(
@@ -212,9 +224,44 @@ class LaserDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         
         # Find contours
-        detections = self._contours_to_detections(mask, frame)
+        detections = self._contours_to_detections(mask, frame, hsv)
         
         debug_info['adaptive_mask'] = mask
+        debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
+        debug_info['num_detections'] = len(detections)
+        
+        return detections, debug_info
+    
+    def _detect_bgr(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
+        """BGR red thresholding - detect red in BGR color space directly."""
+        start_time = time.time()
+        
+        # Create mask for red in BGR space
+        # Red channel should be high, blue and green should be lower
+        # Also check that red is significantly higher than blue and green
+        b, g, r = cv2.split(frame)
+        
+        # Conditions for red detection in BGR:
+        # 1. Red channel is above threshold
+        # 2. Red is significantly higher than blue (r > b + threshold)
+        # 3. Red is significantly higher than green (r > g + threshold)
+        r_thresh = 100  # Minimum red value
+        diff_thresh = 30  # Red must be at least this much higher than B and G
+        
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        mask = ((r > r_thresh) & 
+                (r > b + diff_thresh) & 
+                (r > g + diff_thresh)).astype(np.uint8) * 255
+        
+        # Morphological operations to reduce noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Find contours
+        detections = self._contours_to_detections(mask, frame, None)
+        
+        debug_info['bgr_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
         debug_info['num_detections'] = len(detections)
         
@@ -225,15 +272,16 @@ class LaserDetector:
         start_time = time.time()
         
         # Pulse laser ON, capture frame
+        #pdb.set_trace()
         self.laser_controller1.on()
         self.laser_controller2.on()
-        time.sleep(0.01)  # Wait for LED to fully turn on
+        time.sleep(0.1)  # Wait for LED to fully turn on
         frame_on = frame.copy()
         
         # Pulse laser OFF, capture frame
         self.laser_controller1.off()
         self.laser_controller2.off()
-        time.sleep(0.01)  # Wait for LED to fully turn off
+        time.sleep(0.1)  # Wait for LED to fully turn off
         frame_off = frame.copy()
         
         # Compute difference
@@ -248,7 +296,9 @@ class LaserDetector:
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
             
-            detections = self._contours_to_detections(mask, frame)
+            # Get HSV for debug
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            detections = self._contours_to_detections(mask, frame, hsv)
         else:
             detections = []
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -277,7 +327,7 @@ class LaserDetector:
         debug_info['hybrid_used_method'] = 'adaptive'
         return detections_adaptive, debug_info
     
-    def _contours_to_detections(self, mask: np.ndarray, frame: np.ndarray) -> List[Dict]:
+    def _contours_to_detections(self, mask: np.ndarray, frame: np.ndarray, hsv: np.ndarray = None) -> List[Dict]:
         """Convert contours to detection format."""
         detections = []
         
@@ -287,7 +337,8 @@ class LaserDetector:
         for contour in contours:
             # Filter by area (laser dots are typically 10-50 pixels)
             area = cv2.contourArea(contour)
-            if area < 5 or area > 500:
+            # Tightened: laser dots are small, reject large areas that are likely not lasers
+            if area < 1 or area > 200:
                 continue
             
             # Get bounding box
@@ -309,8 +360,23 @@ class LaserDetector:
             else:
                 confidence = 0.5
             
-            # Only keep high-circularity detections
-            if confidence >= 0.3:
+            # Only keep high-circularity detections (laser dots should be fairly circular)
+            if confidence >= 0.5:
+                # Additional BGR verification: ensure it's actually red, not just HSV-matched
+                cx_int, cy_int = int(cx), int(cy)
+                if 0 <= cx_int < frame.shape[1] and 0 <= cy_int < frame.shape[0]:
+                    b, g, r = frame[cy_int, cx_int]
+                    # Red in BGR: R should be significantly higher than B and G
+                    is_red_bgr = (r > b + 30) and (r > g + 30) and (r > 100)
+                    
+                    # Debug: show HSV and BGR at detection centroid
+                    if self.frame_count % 30 == 0 and len(detections) < 5:
+                        det_hsv = hsv[cy_int, cx_int] if hsv is not None else [0, 0, 0]
+                        print(f"[DEBUG] Detection at ({cx_int},{cy_int}): HSV={det_hsv}, BGR=({b},{g},{r}), is_red_bgr={is_red_bgr}, area={area:.0f}, conf={confidence:.2f}")
+                    
+                    if not is_red_bgr:
+                        continue  # Skip this detection - not actually red in BGR
+                
                 detections.append({
                     'x': float(cx),
                     'y': float(cy),
