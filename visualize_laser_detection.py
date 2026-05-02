@@ -19,6 +19,7 @@ import argparse
 import time
 import numpy as np
 import cv2
+import os
 from pathlib import Path
 from collections import deque
 import pdb
@@ -41,11 +42,7 @@ class LaserDetectionVisualizer:
             max_history: Max frames to keep in history
         """
         self.method = method
-        if method == 'temporal':
-            use_pulsing = True
-        else:
-            use_pulsing = False
-        self.detector = LaserDetector(method=method, conf_threshold=0.3, use_pulsing=use_pulsing,pca_channel1=6, pca_channel2=7)
+        self.detector = LaserDetector(method=method, conf_threshold=0.3,pca_channel1=6, pca_channel2=7)
         
         # History for plots
         self.max_history = max_history
@@ -56,11 +53,21 @@ class LaserDetectionVisualizer:
         
         self.frame_count = 0
         self.total_detections = 0
+        
+        # Create output directory
+        self.output_dir = Path('output/images')
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Store last images for saving
+        self.last_frame_with_det = None
+        self.last_mask_image = None
+        self.last_contours_image = None
     
     def run(self, camera_id: int = 0, max_frames: int = None):
         """Run real-time visualization."""
         try:
             cap = CameraCapture(camera_id=camera_id, width=640, height=480, fps=30)
+            self.detector.set_camera_capture(cap)
         except RuntimeError as e:
             print(f"[ERROR] {e}")
             return
@@ -74,6 +81,8 @@ class LaserDetectionVisualizer:
         try:
             while True:
                 if not paused:
+                    self.detector.laser_controller1.on()
+                    self.detector.laser_controller2.on()
                     ret, frame = cap.read()
                     if not ret:
                         break
@@ -110,9 +119,11 @@ class LaserDetectionVisualizer:
                     paused = not paused
                     print(f"[PAUSE] Video {'paused' if paused else 'resumed'}")
                 elif key == ord('s'):
-                    filename = f"laser_detection_{self.method}_{self.frame_count:04d}.png"
-                    cv2.imwrite(filename, viz)
+                    filename = self.output_dir / f"laser_detection_{self.method}_{self.frame_count:04d}.png"
+                    cv2.imwrite(str(filename), viz)
                     print(f"[SAVED] {filename}")
+                    # Save individual images
+                    self._save_individual_images()
                 
                 if max_frames and self.frame_count >= max_frames:
                     break
@@ -122,6 +133,8 @@ class LaserDetectionVisualizer:
         finally:
             cap.release()
             cv2.destroyAllWindows()
+            self.detector.laser_controller1.off()
+            self.detector.laser_controller2.off()
             self._print_summary()
     
     def _create_composite(self, frame: np.ndarray, detections: list, 
@@ -130,7 +143,7 @@ class LaserDetectionVisualizer:
         height, width = frame.shape[:2]
         
         # Create canvas for composition
-        canvas_width = width * 2
+        canvas_width = width * 3
         canvas_height = height + 200
         canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
         
@@ -150,23 +163,49 @@ class LaserDetectionVisualizer:
         canvas[:height, :width] = frame_with_det
         
         # 2. Draw mask or debug image
-        if 'hsv_mask' in debug_info:
+        mask_image = np.zeros((height, width, 3), dtype=np.uint8)
+        mask_label = ""
+        if 'temporal_diff' in debug_info:
+            diff = debug_info['temporal_diff']
+            if diff.shape[:2] != (height, width):
+                diff = cv2.resize(diff, (width, height))
+            mask_image = diff
+            mask_label = 'Temporal Diff'
+        elif 'hsv_mask' in debug_info:
             mask = debug_info['hsv_mask']
-            mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            canvas[:height, width:] = mask_color
+            mask_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            mask_label = 'HSV Mask'
         elif 'adaptive_mask' in debug_info:
             mask = debug_info['adaptive_mask']
-            mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            canvas[:height, width:] = mask_color
+            mask_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            mask_label = 'Adaptive Mask'
         elif 'bgr_mask' in debug_info:
             mask = debug_info['bgr_mask']
-            mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            canvas[:height, width:] = mask_color
+            mask_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            mask_label = 'BGR Mask'
+        
+        canvas[:height, width:2*width] = mask_image
+        if mask_label:
+            cv2.putText(canvas, mask_label, (width + 10, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # 3. Draw contours image
+        contours_image = np.zeros((height, width, 3), dtype=np.uint8)
+        if 'contours' in debug_info:
+            cv2.drawContours(contours_image, debug_info['contours'], -1, (0, 255, 0), 2)
+        canvas[:height, 2*width:] = contours_image
+        cv2.putText(canvas, 'Contours', (2*width + 10, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         # 3. Info panel
         panel_y = height
-        self._draw_info_panel(canvas, 0, panel_y, width, 200, detections, debug_info, det_time)
-        self._draw_plots_panel(canvas, width, panel_y, width, 200)
+        self._draw_info_panel(canvas, 0, panel_y, width*2, 200, detections, debug_info, det_time)
+        self._draw_plots_panel(canvas, width*2, panel_y, width, 200)
+        
+        # Store individual images for later saving
+        self.last_frame_with_det = frame_with_det
+        self.last_mask_image = mask_image
+        self.last_contours_image = contours_image
         
         return canvas
     
@@ -238,6 +277,30 @@ class LaserDetectionVisualizer:
             y2 = int(offset_y - normalized[i])
             
             cv2.line(canvas, (x1, y1), (x2, y2), color, 1)
+    
+    def _save_individual_images(self):
+        """Save the last individual images (BGR, mask, and contours) to output/images/."""
+        if self.last_frame_with_det is None or self.last_mask_image is None or self.last_contours_image is None:
+            print("[WARNING] Images not yet available for saving")
+            return
+        
+        try:
+            # Save BGR frame with detections
+            bgr_filename = self.output_dir / f"bgr_frame_{self.frame_count:04d}.png"
+            cv2.imwrite(str(bgr_filename), self.last_frame_with_det)
+            print(f"[SAVED] {bgr_filename}")
+            
+            # Save mask image
+            mask_filename = self.output_dir / f"mask_image_{self.frame_count:04d}.png"
+            cv2.imwrite(str(mask_filename), self.last_mask_image)
+            print(f"[SAVED] {mask_filename}")
+            
+            # Save contours image
+            contours_filename = self.output_dir / f"contours_image_{self.frame_count:04d}.png"
+            cv2.imwrite(str(contours_filename), self.last_contours_image)
+            print(f"[SAVED] {contours_filename}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save images: {e}")
     
     def _print_summary(self):
         """Print summary statistics."""

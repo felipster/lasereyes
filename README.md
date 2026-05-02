@@ -161,7 +161,7 @@ pca.frequency = 60
 # Select which channel for led/diode
 led_channel = pca.channels[0]
 # Set Brightness of diode
-led_channel.duty_cycle = 0xffff, full brightnss
+led_channel.duty_cycle = 0xffff #, full brightness
 ```
 
 ## useful I2C commands

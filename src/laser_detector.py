@@ -30,7 +30,7 @@ class LaserController:
 
         self.i2c = I2C(2)
         self.pca = PCA9685(self.i2c, address=0x40)
-        self.pca.frequency = 50  # Set frequency to 60Hz for LED control
+        self.pca.frequency = 1000  # Set frequency to 1000Hz for LED control
         self.led_channel = self.pca.channels[pca_channel]
         self.is_on = False
     
@@ -65,9 +65,9 @@ class LaserDetector:
     def __init__(self, 
                  method: str = "hsv",
                  conf_threshold: float = 0.8,
-                 use_pulsing: bool = False,
                  pca_channel1: int = 6,
                  pca_channel2: int = 7,
+                 camera_capture: Optional['CameraCapture'] = None,
                  hsv_h_ranges: Optional[List[Tuple[int, int]]] = None,
                  hsv_s_min: int = 50,
                  hsv_v_min: int = 50):
@@ -77,17 +77,18 @@ class LaserDetector:
         Args:
             method: Detection method - "hsv", "adaptive", "temporal", "hybrid"
             conf_threshold: Confidence threshold for detections
-            use_pulsing: Enable PCA9685 laser pulsing for temporal detection
-            pca_channel: PCA9685 channel for laser control (default: 7)
+            pca_channel1: PCA9685 channel for first laser control (default: 6)
+            pca_channel2: PCA9685 channel for second laser control (default: 7)
+            camera_capture: CameraCapture instance for temporal method (optional)
             hsv_h_ranges: List of (h_min, h_max) tuples for red hue ranges
             hsv_s_min: Saturation minimum threshold (0-255)
             hsv_v_min: Value minimum threshold (0-255)
         """
         self.method = method
         self.conf_threshold = conf_threshold
-        self.use_pulsing = use_pulsing
         self.pca_channel1 = pca_channel1
         self.pca_channel2 = pca_channel2
+        self.camera_capture = camera_capture
         # HSV thresholds for red laser (650nm)
         # Red wraps around in HSV: [0-10] and [170-180]
         self.hsv_h_ranges = hsv_h_ranges or [(0, 10), (170, 180)]
@@ -97,18 +98,21 @@ class LaserDetector:
         # Initialize laser controller if pulsing enabled
         self.laser_controller1 = None
         self.laser_controller2 = None
-        if self.use_pulsing and PCA9685_AVAILABLE:
+        if PCA9685_AVAILABLE:
             try:
                 self.laser_controller1 = LaserController(pca_channel=self.pca_channel1)
                 self.laser_controller2 = LaserController(pca_channel=self.pca_channel2)
             except Exception as e:
                 print(f"[WARNING] Could not initialize laser controller: {e}")
-                self.use_pulsing = False
         
         self.last_detections = []
         self.last_frame_on = None
         self.frame_count = 0
         self.debug_info = {}
+    
+    def set_camera_capture(self, camera_capture: 'CameraCapture'):
+        """Set the camera capture instance for temporal detection."""
+        self.camera_capture = camera_capture
         
     def detect(self, frame: np.ndarray) -> Tuple[List[Dict], Dict]:
         """
@@ -142,11 +146,7 @@ class LaserDetector:
         elif self.method == "bgr":
             detections, debug_info = self._detect_bgr(frame, debug_info)
         elif self.method == "temporal":
-            if self.use_pulsing and self.laser_controller1 and self.laser_controller2:
-                detections, debug_info = self._detect_temporal(frame, debug_info)
-            else:
-                print("[WARNING] Temporal requires pulsing - falling back to HSV")
-                detections, debug_info = self._detect_hsv(frame, debug_info)
+            detections, debug_info = self._detect_temporal(frame, debug_info) 
         elif self.method == "hybrid":
             detections, debug_info = self._detect_hybrid(frame, debug_info)
         else:
@@ -191,7 +191,7 @@ class LaserDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
         # Find contours
-        detections = self._contours_to_detections(mask, frame, hsv)
+        detections = self._contours_to_detections(mask, frame, hsv, debug_info)
         
         debug_info['hsv_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
@@ -224,7 +224,7 @@ class LaserDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         
         # Find contours
-        detections = self._contours_to_detections(mask, frame, hsv)
+        detections = self._contours_to_detections(mask, frame, hsv, debug_info)
         
         debug_info['adaptive_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
@@ -259,7 +259,7 @@ class LaserDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
         # Find contours
-        detections = self._contours_to_detections(mask, frame, None)
+        detections = self._contours_to_detections(mask, frame, None, debug_info)
         
         debug_info['bgr_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
@@ -271,21 +271,24 @@ class LaserDetector:
         """Temporal frame differencing with laser pulsing."""
         start_time = time.time()
         
-        # Pulse laser ON, capture frame
-        #pdb.set_trace()
-        self.laser_controller1.on()
-        self.laser_controller2.on()
-        time.sleep(0.1)  # Wait for LED to fully turn on
-        frame_on = frame.copy()
+        if self.camera_capture is None:
+            raise RuntimeError("CameraCapture required for temporal detection method")
+        
+        # capture frame with lasers on, triggered by main loop
+        ret_on, frame_on = self.camera_capture.read()
+        if not ret_on:
+            frame_on = frame.copy()  # Fallback to passed frame
         
         # Pulse laser OFF, capture frame
         self.laser_controller1.off()
         self.laser_controller2.off()
-        time.sleep(0.1)  # Wait for LED to fully turn off
-        frame_off = frame.copy()
+        time.sleep(0.001)  # Wait for LED to fully turn off
+        ret_off, frame_off = self.camera_capture.read()
+        if not ret_off:
+            frame_off = frame.copy()  # Fallback
         
         # Compute difference
-        if self.last_frame_on is not None:
+        if frame_on is not None and frame_off is not None:
             diff = cv2.absdiff(frame_on, frame_off)
             
             # Convert to grayscale and threshold
@@ -298,10 +301,12 @@ class LaserDetector:
             
             # Get HSV for debug
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            detections = self._contours_to_detections(mask, frame, hsv)
+            detections = self._contours_to_detections(mask, frame, hsv, debug_info)
+            debug_info['temporal_diff'] = diff
         else:
             detections = []
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            debug_info['temporal_diff'] = np.zeros_like(frame)
         
         self.last_frame_on = frame_on
         
@@ -327,12 +332,15 @@ class LaserDetector:
         debug_info['hybrid_used_method'] = 'adaptive'
         return detections_adaptive, debug_info
     
-    def _contours_to_detections(self, mask: np.ndarray, frame: np.ndarray, hsv: np.ndarray = None) -> List[Dict]:
+    def _contours_to_detections(self, mask: np.ndarray, frame: np.ndarray, hsv: np.ndarray = None, debug_info: Optional[Dict] = None) -> List[Dict]:
         """Convert contours to detection format."""
         detections = []
         
         # Find contours
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if debug_info is not None:
+            debug_info['contours'] = contours
         
         for contour in contours:
             # Filter by area (laser dots are typically 10-50 pixels)
