@@ -109,10 +109,31 @@ class PiCamera2Wrapper:
             except Exception as e:
                 print(f"[WARNING] Could not set contrast: {e}")
     
+    def lock_exposure(self, exposure_time: int = 8000, gain: float = 2.0,
+                     colour_gains: tuple = (1.8, 0.8)):
+        """Lock camera to fixed exposure/gain for temporal diff stability."""
+        try:
+            self.camera.set_controls({
+                "AeEnable": False,
+                "AwbEnable": False,
+                "ExposureTime": exposure_time,
+                "AnalogueGain": gain,
+                "ColourGains": colour_gains,
+            })
+        except Exception as e:
+            print(f"[WARNING] Could not lock exposure: {e}")
+
+    def unlock_exposure(self):
+        """Re-enable auto exposure and white balance."""
+        try:
+            self.camera.set_controls({"AeEnable": True, "AwbEnable": True})
+        except Exception as e:
+            print(f"[WARNING] Could not unlock exposure: {e}")
+
     def get_camera_matrix(self) -> np.ndarray:
         """
         Get camera intrinsic matrix from properties.
-        
+
         Returns:
             3x3 camera matrix (K matrix)
         """
@@ -189,7 +210,17 @@ class CameraCapture:
                 self.camera.release()
             else:
                 self.camera.release()
-    
+
+    def lock_exposure(self, **kwargs):
+        """Lock camera to fixed exposure/gain for temporal diff stability."""
+        if self.is_picamera2:
+            self.camera.lock_exposure(**kwargs)
+
+    def unlock_exposure(self):
+        """Re-enable auto exposure and white balance."""
+        if self.is_picamera2:
+            self.camera.unlock_exposure()
+
     def get_camera_matrix(self) -> np.ndarray:
         """Get camera matrix if available."""
         if self.is_picamera2 and hasattr(self.camera, 'get_camera_matrix'):

@@ -165,7 +165,14 @@ class LaserDetectionVisualizer:
         # 2. Draw mask or debug image
         mask_image = np.zeros((height, width, 3), dtype=np.uint8)
         mask_label = ""
-        if 'temporal_diff' in debug_info:
+        if 'brightness_excess' in debug_info:
+            # Show brightness excess image for both temporal+C and standalone brightness method
+            excess = debug_info['brightness_excess']
+            if excess.shape[:2] != (height, width):
+                excess = cv2.resize(excess, (width, height))
+            mask_image = excess
+            mask_label = 'Red Excess (C)'
+        elif 'temporal_diff' in debug_info:
             diff = debug_info['temporal_diff']
             if diff.shape[:2] != (height, width):
                 diff = cv2.resize(diff, (width, height))
@@ -183,6 +190,10 @@ class LaserDetectionVisualizer:
             mask = debug_info['bgr_mask']
             mask_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
             mask_label = 'BGR Mask'
+        elif 'brightness_mask' in debug_info:
+            mask = debug_info['brightness_mask']
+            mask_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            mask_label = 'Brightness Mask'
         
         canvas[:height, width:2*width] = mask_image
         if mask_label:
@@ -333,7 +344,7 @@ def main():
     parser.add_argument('--camera', type=int, default=0,
                         help='Camera device ID')
     parser.add_argument('--method', type=str, default='hsv',
-                        choices=['hsv', 'adaptive', 'bgr', 'temporal', 'hybrid'],
+                        choices=['hsv', 'adaptive', 'bgr', 'brightness', 'temporal', 'hybrid'],
                         help='Detection method')
     parser.add_argument('--max-frames', type=int, default=None,
                         help='Maximum frames to process')

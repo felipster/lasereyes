@@ -109,6 +109,7 @@ class LaserDetector:
         self.last_frame_on = None
         self.frame_count = 0
         self.debug_info = {}
+        self._exposure_locked = False
     
     def set_camera_capture(self, camera_capture: 'CameraCapture'):
         """Set the camera capture instance for temporal detection."""
@@ -145,6 +146,8 @@ class LaserDetector:
             detections, debug_info = self._detect_adaptive(frame, debug_info)
         elif self.method == "bgr":
             detections, debug_info = self._detect_bgr(frame, debug_info)
+        elif self.method == "brightness":
+            detections, debug_info = self._detect_brightness_excess(frame, debug_info)
         elif self.method == "temporal":
             detections, debug_info = self._detect_temporal(frame, debug_info) 
         elif self.method == "hybrid":
@@ -268,54 +271,125 @@ class LaserDetector:
         return detections, debug_info
     
     def _detect_temporal(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
-        """Temporal frame differencing with laser pulsing."""
+        """Temporal frame differencing with laser pulsing (Strategy A+C).
+
+        Strategy A: lock camera exposure/gain before capture pairs so AGC doesn't
+        corrupt the diff with full-frame brightness shifts.
+        Strategy C: AND the temporal diff mask with a local red-channel excess mask
+        to handle saturated laser dots that lose their colour information.
+        """
         start_time = time.time()
-        
+
         if self.camera_capture is None:
             raise RuntimeError("CameraCapture required for temporal detection method")
-        
-        # capture frame with lasers on, triggered by main loop
+
+        # Strategy A: lock exposure on first call so AGC cannot shift between frames
+        if not self._exposure_locked:
+            self.camera_capture.lock_exposure()
+            self._exposure_locked = True
+            time.sleep(0.1)  # let camera settle to new fixed settings
+
+        # Capture laser-ON frame (lasers already on from main loop)
         ret_on, frame_on = self.camera_capture.read()
         if not ret_on:
-            frame_on = frame.copy()  # Fallback to passed frame
-        
-        # Pulse laser OFF, capture frame
-        self.laser_controller1.off()
-        self.laser_controller2.off()
-        time.sleep(0.001)  # Wait for LED to fully turn off
+            frame_on = frame.copy()
+
+        # Turn lasers off and wait long enough for full extinguish + one camera frame
+        if self.laser_controller1:
+            self.laser_controller1.off()
+        if self.laser_controller2:
+            self.laser_controller2.off()
+        time.sleep(0.020)  # 20 ms: ~1 PCA9685 cycle at 50 Hz + camera settle
+
         ret_off, frame_off = self.camera_capture.read()
         if not ret_off:
-            frame_off = frame.copy()  # Fallback
-        
-        # Compute difference
+            frame_off = frame.copy()
+
+        # Restore lasers for next iteration
+        if self.laser_controller1:
+            self.laser_controller1.on()
+        if self.laser_controller2:
+            self.laser_controller2.on()
+
         if frame_on is not None and frame_off is not None:
             diff = cv2.absdiff(frame_on, frame_off)
-            
-            # Convert to grayscale and threshold
-            gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-            _, mask = cv2.threshold(gray_diff, 50, 255, cv2.THRESH_BINARY)
-            
-            # Morphological operations
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+            # Use the red channel of the diff — red laser changes red channel most
+            diff_red = diff[:, :, 2]
+            _, mask_temporal = cv2.threshold(diff_red, 10, 255, cv2.THRESH_BINARY)
+
+            # Strategy C: local red-channel brightness excess on the laser-on frame.
+            # Computed at half resolution (4× faster); (15,15) at 320×240 is
+            # equivalent to (30,30) at 640×480 for background estimation.
+            fh, fw = frame_on.shape[:2]
+            r_small = cv2.resize(frame_on[:, :, 2], (fw // 2, fh // 2)).astype(np.float32)
+            r_bg_small = cv2.GaussianBlur(r_small, (15, 15), 0)
+            r_excess_small = np.clip(r_small - r_bg_small, 0, 255).astype(np.uint8)
+            r_excess = cv2.resize(r_excess_small, (fw, fh))
+            _, mask_excess = cv2.threshold(r_excess, 20, 255, cv2.THRESH_BINARY)
+
+            # Require both signals: temporal change AND local brightness peak
+            mask = cv2.bitwise_and(mask_temporal, mask_excess)
+
+            # (3,3) open only: removes isolated 1-px ADC noise but preserves
+            # 2-3 px laser dots. A (5,5) kernel would erase them entirely.
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            
-            # Get HSV for debug
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            detections = self._contours_to_detections(mask, frame, hsv, debug_info)
+
+            hsv = cv2.cvtColor(frame_on, cv2.COLOR_BGR2HSV)
+            detections = self._contours_to_detections(mask, frame_on, hsv, debug_info)
+
             debug_info['temporal_diff'] = diff
+            debug_info['brightness_excess'] = cv2.cvtColor(r_excess, cv2.COLOR_GRAY2BGR)
         else:
             detections = []
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             debug_info['temporal_diff'] = np.zeros_like(frame)
-        
+            debug_info['brightness_excess'] = np.zeros_like(frame)
+
         self.last_frame_on = frame_on
-        
+
         debug_info['temporal_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
         debug_info['num_detections'] = len(detections)
-        
+
         return detections, debug_info
     
+    def _detect_brightness_excess(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
+        """Strategy C: local red-channel brightness peak detection.
+
+        Finds pixels where the red channel is significantly brighter than their
+        local neighbourhood. This is background-independent and works even when
+        the laser dot is fully saturated (appears white/pink in BGR).
+        """
+        start_time = time.time()
+
+        # Compute background at half resolution: 4× faster blur with equivalent
+        # spatial scale (15×15 at 320×240 ≈ 30×30 at 640×480).
+        h, w = frame.shape[:2]
+        r_full = frame[:, :, 2]
+        r_small = cv2.resize(r_full, (w // 2, h // 2)).astype(np.float32)
+        r_bg_small = cv2.GaussianBlur(r_small, (15, 15), 0)
+        r_excess_small = np.clip(r_small - r_bg_small, 0, 255).astype(np.uint8)
+        r_excess = cv2.resize(r_excess_small, (w, h))
+
+        _, mask = cv2.threshold(r_excess, 25, 255, cv2.THRESH_BINARY)
+
+        # (3,3) open removes 1-px noise without erasing 2-3 px laser dots.
+        # No close: it expands blobs, creating large contours that slow findContours.
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        detections = self._contours_to_detections(mask, frame, hsv, debug_info)
+
+        debug_info['brightness_mask'] = mask
+        debug_info['brightness_excess'] = cv2.cvtColor(r_excess, cv2.COLOR_GRAY2BGR)
+        debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
+        debug_info['num_detections'] = len(detections)
+
+        return detections, debug_info
+
     def _detect_hybrid(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
         """Hybrid: Try HSV first (fast), fall back to adaptive if needed."""
         # First, try HSV (fast path)
@@ -333,7 +407,7 @@ class LaserDetector:
         return detections_adaptive, debug_info
     
     def _contours_to_detections(self, mask: np.ndarray, frame: np.ndarray, hsv: np.ndarray = None, debug_info: Optional[Dict] = None) -> List[Dict]:
-        """Convert contours to detection format."""
+        """Convert contours to detection format using multi-factor confidence scoring."""
         detections = []
         
         # Find contours
@@ -360,30 +434,31 @@ class LaserDetector:
             else:
                 cx, cy = x + w / 2, y + h / 2
             
-            # Compute confidence based on circularity
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter > 0:
-                circularity = (4 * np.pi * area) / (perimeter ** 2)
-                confidence = min(1.0, circularity)  # More circular = more confident
-            else:
-                confidence = 0.5
+            cx_int, cy_int = int(cx), int(cy)
             
-            # Only keep high-circularity detections (laser dots should be fairly circular)
-            if confidence >= 0.5:
-                # Additional BGR verification: ensure it's actually red, not just HSV-matched
-                cx_int, cy_int = int(cx), int(cy)
+            # Compute three confidence components
+            compactness_score = self._compute_compactness_score(area, w, h)
+            circularity_score = self._compute_circularity(contour, area)
+            red_saturation_score = self._compute_red_saturation_score(contour, frame, hsv, mask)
+            
+            # Weighted confidence: compactness (30%), red saturation (50%), circularity (20%)
+            confidence = (
+                0.30 * compactness_score +
+                0.50 * red_saturation_score +
+                0.20 * circularity_score
+            )
+            
+            # Only keep detections with meaningful confidence
+            if confidence >= 0.45:
+                # Log HSV and BGR values at/around the contour for debugging
                 if 0 <= cx_int < frame.shape[1] and 0 <= cy_int < frame.shape[0]:
                     b, g, r = frame[cy_int, cx_int]
-                    # Red in BGR: R should be significantly higher than B and G
-                    is_red_bgr = (r > b + 30) and (r > g + 30) and (r > 100)
                     
-                    # Debug: show HSV and BGR at detection centroid
+                    # Debug: show all scoring components and pixel values
                     if self.frame_count % 30 == 0 and len(detections) < 5:
                         det_hsv = hsv[cy_int, cx_int] if hsv is not None else [0, 0, 0]
-                        print(f"[DEBUG] Detection at ({cx_int},{cy_int}): HSV={det_hsv}, BGR=({b},{g},{r}), is_red_bgr={is_red_bgr}, area={area:.0f}, conf={confidence:.2f}")
-                    
-                    if not is_red_bgr:
-                        continue  # Skip this detection - not actually red in BGR
+                        print(f"[DEBUG] Detection at ({cx_int},{cy_int}): HSV={det_hsv}, BGR=({b},{g},{r})")
+                        print(f"  Scores: compact={compactness_score:.2f}, red_sat={red_saturation_score:.2f}, circ={circularity_score:.2f}, final={confidence:.2f}")
                 
                 detections.append({
                     'x': float(cx),
@@ -399,3 +474,103 @@ class LaserDetector:
         detections = sorted(detections, key=lambda d: d['confidence'], reverse=True)
         
         return detections
+    
+    def _compute_compactness_score(self, area: float, bbox_width: float, bbox_height: float) -> float:
+        """
+        Compute compactness score: ratio of contour area to bounding box area.
+        
+        Higher = more compact/filled. Tolerates ellipses and moderate irregularities.
+        Range: [0, 1]
+        """
+        bbox_area = bbox_width * bbox_height
+        if bbox_area == 0:
+            return 0.0
+        compactness = area / bbox_area
+        return min(1.0, compactness)
+    
+    def _compute_circularity(self, contour: np.ndarray, area: float) -> float:
+        """
+        Compute improved circularity based on solidity and aspect ratio.
+        
+        Better than simple isoperimetric quotient for:
+        - Donut shapes (red ring with white center)
+        - Ellipses (elongated blobs)
+        - Noisy contours (prevents perimeter inflation)
+        
+        Range: [0, 1]
+        """
+        # Method 1: Solidity (area / convex hull area)
+        # Captures how "filled" the contour is, robust to noise
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        solidity = area / hull_area if hull_area > 0 else 0.0
+        
+        # Method 2: Aspect ratio penalty
+        # More circular shapes have aspect ratios close to 1
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect_ratio = float(w) / h if h > 0 else 1.0
+        aspect_ratio = min(aspect_ratio, 1.0 / aspect_ratio)  # Normalize to [0, 1]
+        
+        # Isoperimetric quotient (weaker signal, but still useful)
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter > 0:
+            iso_quotient = (4 * np.pi * area) / (perimeter ** 2)
+        else:
+            iso_quotient = 0.5
+        
+        # Combined circularity: favor solidity and aspect ratio over perimeter
+        circularity = (
+            0.60 * solidity +      # Solidity: most important for handling donuts
+            0.25 * aspect_ratio +  # Aspect ratio: penalizes elongation
+            0.15 * min(1.0, iso_quotient)  # Perimeter-based: weakened due to noise sensitivity
+        )
+        
+        return min(1.0, circularity)
+    
+    def _compute_red_saturation_score(self, contour: np.ndarray, frame: np.ndarray, 
+                                     hsv: np.ndarray = None, mask: np.ndarray = None) -> float:
+        """
+        Compute red saturation score: percentage of pixels within contour that are "red".
+        
+        Most direct measure of laser presence. Handles:
+        - Donut shapes (red ring detected)
+        - Ellipses (distributed red pixels)
+        - Noise (only counts truly red pixels)
+        
+        Range: [0, 1]
+        """
+        if mask is None:
+            return 0.5
+        
+        # Create a mask for just this contour
+        contour_mask = np.zeros(mask.shape, dtype=np.uint8)
+        cv2.drawContours(contour_mask, [contour], 0, 255, -1)
+        
+        # Count pixels in contour
+        total_pixels = np.sum(contour_mask > 0)
+        if total_pixels == 0:
+            return 0.5
+        
+        # Count red pixels within contour.
+        # Two complementary checks are OR'd together:
+        #   HSV check: works for non-saturated red (high S)
+        #   Normalised-RGB check: works for saturated/near-white laser dots where
+        #     S drops to ~0, by checking that R dominates the sum R+G+B.
+        b_f = frame[:, :, 0].astype(np.float32)
+        g_f = frame[:, :, 1].astype(np.float32)
+        r_f = frame[:, :, 2].astype(np.float32)
+        r_norm = r_f / (r_f + g_f + b_f + 1.0)
+        norm_red_mask = (r_norm > 0.38) & (r_f > 80)
+
+        if hsv is not None:
+            h, s, v = cv2.split(hsv)
+            hsv_red_mask = ((h <= 10) | (h >= 170)) & (s > 80) & (v > 80)
+            combined_red = hsv_red_mask | norm_red_mask
+        else:
+            combined_red = norm_red_mask
+
+        red_pixels = np.sum(combined_red & (contour_mask > 0))
+        
+        # Red saturation: percentage of contour pixels that are red
+        red_saturation = red_pixels / total_pixels
+        return min(1.0, red_saturation)
