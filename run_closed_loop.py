@@ -40,9 +40,9 @@ def main():
                         help='Print debug information')
     parser.add_argument('--stream', action='store_true', default=True,
                         help='Enable camera stream visualization')
-    parser.add_argument('--laser-method', type=str, default='hsv',
-                        choices=['hsv', 'adaptive', 'temporal', 'hybrid'],
-                        help='Laser detection method')
+    parser.add_argument('--laser-method', type=str, default=None,
+                        choices=['hsv', 'adaptive', 'bgr', 'brightness', 'temporal', 'hybrid'],
+                        help='Laser detection method (overrides config.yaml)')
     parser.add_argument('--no-stream', dest='stream', action='store_false',
                         help='Disable camera stream visualization')
     
@@ -54,10 +54,10 @@ def main():
     
     # Extract servo limits
     servo_limits = np.array(config['servo_limits'], dtype=np.float32)
-    
+
     # Extract model path
     pose_model = config['models']['pose']
-    
+
     # Optional: Load camera calibration
     camera_matrix = None
     if 'camera_calibration' in config:
@@ -66,25 +66,36 @@ def main():
             calib_data = np.load(calib_file)
             camera_matrix = calib_data['camera_matrix']
             print(f"[STARTUP] Loaded camera calibration from {calib_file}")
-    
+
+    # Build laser config: CLI --laser-method overrides config.yaml method field
+    laser_config = config.get('detectors', {}).get('laser', {})
+    if args.laser_method is not None:
+        laser_config = dict(laser_config)   # copy so we don't mutate config
+        laser_config['method'] = args.laser_method
+
+    laser_method = laser_config.get('method', 'hsv')
+
+    pose_config = config.get('detectors', {}).get('pose', {})
+
     # Initialize controller with streaming
     print("[STARTUP] Initializing LaserEyeControllerStreaming...")
     controller = LaserEyeControllerStreaming(
         servo_limits=servo_limits,
         pose_model_path=pose_model,
-        laser_method=args.laser_method,
+        laser_config=laser_config,
+        pose_config=pose_config,
         camera_matrix=camera_matrix,
         loop_rate_hz=config.get('loop_rate_hz', 30.0),
         verbose=args.verbose,
         enable_visualization=args.stream
     )
-    
+    print(f"[STARTUP] Pose inference device: {pose_config.get('device', 'cpu')}")
+
     # Print laser detection parameters
-    detector_config = config.get('detectors', {}).get('laser', {})
-    print(f"[STARTUP] Laser Detection Method: {args.laser_method}")
-    print(f"[STARTUP] HSV Ranges: {detector_config.get('hsv_h_min', [0, 170])}-"
-          f"{detector_config.get('hsv_h_max', [10, 180])}")
-    print(f"[STARTUP] Confidence Threshold: {detector_config.get('confidence_threshold', 0.5)}")
+    print(f"[STARTUP] Laser Detection Method: {laser_method}")
+    print(f"[STARTUP] HSV Ranges: {laser_config.get('hsv_h_ranges', [[0,8],[172,180]])}")
+    print(f"[STARTUP] HSV S/V min: {laser_config.get('hsv_s_min', 150)} / {laser_config.get('hsv_v_min', 150)}")
+    print(f"[STARTUP] Confidence Threshold: {laser_config.get('confidence_threshold', 0.5)}")
     
     # Center eyes to safe position
     print("[STARTUP] Centering eyes...")

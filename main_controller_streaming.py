@@ -26,37 +26,46 @@ class LaserEyeControllerStreaming:
     Displays camera feed with detection overlays and algorithm diagnostics.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  servo_limits: np.ndarray,
                  pose_model_path: str,
-                 laser_method: str = "hsv",
+                 laser_config: Optional[Dict] = None,
+                 pose_config: Optional[Dict] = None,
                  camera_matrix: Optional[np.ndarray] = None,
                  loop_rate_hz: float = 30.0,
                  verbose: bool = False,
                  enable_visualization: bool = True):
         """
         Initialize main controller with streaming.
-        
+
         Args:
             servo_limits: 6x2 array of servo angle limits
             pose_model_path: Path to YOLO11-pose weights
-            laser_method: Laser detection method ("hsv", "adaptive", "temporal", "hybrid")
+            laser_config: Dict of laser detector settings from config.yaml
             camera_matrix: 3x3 camera intrinsics (if None, uses RPi Camera v3 defaults)
             loop_rate_hz: Target update frequency
             verbose: Print debug info
             enable_visualization: Show camera stream with overlays
         """
         self.servo_controller = ServoController(servo_limits)
-        self.pose_detector = PoseDetector(pose_model_path, camera_matrix=camera_matrix)
-        
-        # Initialize laser detector with classical signal processing
+        pose_cfg = pose_config or {}
+        self.pose_detector = PoseDetector(
+            pose_model_path,
+            camera_matrix=camera_matrix,
+            device=pose_cfg.get('device', 'cpu'),
+        )
+
+        cfg = laser_config or {}
+        h_ranges_raw = cfg.get('hsv_h_ranges', [[0, 8], [172, 180]])
         self.laser_detector = LaserDetector(
-            method=laser_method,
-            conf_threshold=0.3,
-            use_pulsing=False,  # Set to True if using temporal method
-            hsv_h_ranges=[(0, 10), (170, 180)],  # Red hue ranges
-            hsv_s_min=80,
-            hsv_v_min=100
+            method=cfg.get('method', 'hsv'),
+            conf_threshold=cfg.get('confidence_threshold', 0.5),
+            pca_channel1=cfg.get('pca_channel1', 6),
+            pca_channel2=cfg.get('pca_channel2', 7),
+            hsv_h_ranges=[tuple(r) for r in h_ranges_raw],
+            hsv_s_min=cfg.get('hsv_s_min', 150),
+            hsv_v_min=cfg.get('hsv_v_min', 150),
+            pca=self.servo_controller.pca,  # share the single PCA9685 instance
         )
         
         self.tracking_controller = TrackingController()
@@ -88,7 +97,17 @@ class LaserEyeControllerStreaming:
         except RuntimeError as e:
             print(f"[ERROR] {e}")
             return
-        
+
+        # Wire camera into detector (required for temporal method's on/off captures;
+        # also used by all methods for exposure locking via lock_exposure()).
+        self.laser_detector.set_camera_capture(cap)
+
+        # Lasers on for all methods; temporal turns them off internally per frame.
+        if self.laser_detector.laser_controller1:
+            self.laser_detector.laser_controller1.on()
+        if self.laser_detector.laser_controller2:
+            self.laser_detector.laser_controller2.on()
+
         self.running = True
         loop_start = time.time()
         
@@ -262,6 +281,10 @@ class LaserEyeControllerStreaming:
             print(f"[STATS] Max frame time: {max_time:.1f}ms")
             print(f"[STATS] Avg FPS: {1/np.mean(self.frame_times):.1f}")
         
+        if self.laser_detector.laser_controller1:
+            self.laser_detector.laser_controller1.off()
+        if self.laser_detector.laser_controller2:
+            self.laser_detector.laser_controller2.off()
         self.servo_controller.emergency_stop()
         cap.release()
         cv2.destroyAllWindows()

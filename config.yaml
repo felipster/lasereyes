@@ -68,13 +68,22 @@ kalman_filter:
 detectors:
   pose:
     confidence_threshold: 0.5
+    # Inference device for the YOLO pose model.
+    # 'cpu'     — ARM Cortex-A76 cores (always works, ~10-15 fps with yolo11n-pose)
+    # 'hailo:0' — Hailo-8L NPU on the AI HAT+ (~30+ fps, requires a compiled .hef model)
+    device: 'cpu'
   laser:
+    method: "temporal"               # hsv | bgr | brightness | temporal | hybrid
     confidence_threshold: 0.5
-    use_hsv_filter: true   # Pre-filter with HSV for speed
-    hsv_h_min: [0, 170]    # Red hue ranges (in HSV space)
-    hsv_h_max: [10, 180]
-    hsv_s_min: 100         # Saturation threshold
-    hsv_v_min: 100         # Value threshold
+    pca_channel1: 6             # PCA9685 channel for laser 1
+    pca_channel2: 7             # PCA9685 channel for laser 2
+    # Hue bands for a 650 nm red laser (HSV hue wraps at 0/180).
+    # Tight bands + high S/V reject background reds under fixed exposure.
+    hsv_h_ranges:
+      - [0, 8]
+      - [172, 180]
+    hsv_s_min: 150              # 0-255; high value rejects dim/desaturated reds
+    hsv_v_min: 150              # 0-255; high value rejects dark reds
 
 # ============================================================================
 # Camera Parameters

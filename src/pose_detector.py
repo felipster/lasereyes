@@ -22,9 +22,10 @@ class PoseDetector:
     CHIN = 3
     FOREHEAD = 4
     
-    def __init__(self, model_path: str = "yolo/yolo11n-pose.pt", 
+    def __init__(self, model_path: str = "yolo/yolo11n-pose.pt",
                  conf_threshold: float = 0.5,
-                 camera_matrix: Optional[np.ndarray] = None):
+                 camera_matrix: Optional[np.ndarray] = None,
+                 device: str = 'cpu'):
         """
         Initialize pose model.
         
@@ -36,6 +37,7 @@ class PoseDetector:
         """
         self.model = YOLO(model_path)
         self.conf_threshold = conf_threshold
+        self.device = device
         
         # Default RPi Camera v3 (OV5647) intrinsics at 640x480
         # Should be calibrated using calibrate_camera() for your specific setup
@@ -55,14 +57,15 @@ class PoseDetector:
         
         self.last_detection = None
         
-    def detect(self, frame: np.ndarray, device: int = 0) -> Optional[Dict]:
+    def detect(self, frame: np.ndarray, device: str = 'cpu') -> Optional[Dict]:
         """
         Run pose detection on frame.
-        
+
         Args:
-            frame: Input image (BGR, from RPi camera)
-            device: GPU/CPU device ID
-            
+            frame:  Input image (BGR, from RPi camera)
+            device: Inference device — 'cpu' for CPU, 'hailo:0' for Hailo-8L NPU
+                    (Hailo requires the model to be a compiled .hef file, not .pt)
+
         Returns:
             {
                 'detected': bool,
@@ -77,7 +80,7 @@ class PoseDetector:
                 'confidence': float
             }
         """
-        results = self.model(frame, device=device, verbose=False)
+        results = self.model(frame, device=self.device, verbose=False)
         
         detection = {
             'detected': False,

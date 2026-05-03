@@ -9,29 +9,22 @@ import cv2
 import time
 import pdb
 
-from adafruit_servokit import ServoKit
 from adafruit_extended_bus import ExtendedI2C as I2C
 from adafruit_pca9685 import PCA9685
 PCA9685_AVAILABLE = True
 
 
 class LaserController:
-    """Control laser on/off via PCA9685 PWM."""
-    
-    def __init__(self, pca_channel: int = 7):
-        """
-        Initialize laser controller on given PCA9685 channel.
-        
-        Args:
-            pca_channel: Channel number (0-15)
-        """
-        if not PCA9685_AVAILABLE:
-            raise RuntimeError("adafruit_pca9685 not available")
+    """Control laser on/off via a PCA9685 PWM channel."""
 
-        self.i2c = I2C(2)
-        self.pca = PCA9685(self.i2c, address=0x40)
-        self.pca.frequency = 1000  # Set frequency to 1000Hz for LED control
-        self.led_channel = self.pca.channels[pca_channel]
+    def __init__(self, pca: 'PCA9685', pca_channel: int = 7):
+        """
+        Args:
+            pca:         Shared PCA9685 instance (owned by ServoController or
+                         created by LaserDetector when used standalone).
+            pca_channel: Channel number (0-15) for this laser's LED.
+        """
+        self.led_channel = pca.channels[pca_channel]
         self.is_on = False
     
     def on(self):
@@ -62,46 +55,56 @@ class LaserDetector:
     Can optionally use PCA9685 PWM pulsing for temporal detection.
     """
     
-    def __init__(self, 
+    def __init__(self,
                  method: str = "hsv",
                  conf_threshold: float = 0.8,
                  pca_channel1: int = 6,
                  pca_channel2: int = 7,
                  camera_capture: Optional['CameraCapture'] = None,
                  hsv_h_ranges: Optional[List[Tuple[int, int]]] = None,
-                 hsv_s_min: int = 50,
-                 hsv_v_min: int = 50):
+                 hsv_s_min: int = 150,
+                 hsv_v_min: int = 150,
+                 pca: Optional['PCA9685'] = None):
         """
-        Initialize laser detector with HSV thresholding.
-        
         Args:
-            method: Detection method - "hsv", "adaptive", "temporal", "hybrid"
-            conf_threshold: Confidence threshold for detections
-            pca_channel1: PCA9685 channel for first laser control (default: 6)
-            pca_channel2: PCA9685 channel for second laser control (default: 7)
-            camera_capture: CameraCapture instance for temporal method (optional)
-            hsv_h_ranges: List of (h_min, h_max) tuples for red hue ranges
-            hsv_s_min: Saturation minimum threshold (0-255)
-            hsv_v_min: Value minimum threshold (0-255)
+            method:         Detection method — "hsv" | "bgr" | "brightness" | "temporal" | "hybrid"
+            conf_threshold: Minimum confidence to report a detection
+            pca_channel1:   PCA9685 channel for laser 1
+            pca_channel2:   PCA9685 channel for laser 2
+            camera_capture: Required for temporal method; also used for lock_exposure()
+            hsv_h_ranges:   List of (h_min, h_max) hue bands for red detection
+            hsv_s_min:      HSV saturation minimum (0-255)
+            hsv_v_min:      HSV value minimum (0-255)
+            pca:            Shared PCA9685 instance. When None (standalone use, e.g.
+                            visualiser) a new one is created on I2C-2 at 50 Hz.
         """
         self.method = method
         self.conf_threshold = conf_threshold
         self.pca_channel1 = pca_channel1
         self.pca_channel2 = pca_channel2
         self.camera_capture = camera_capture
-        # HSV thresholds for red laser (650nm)
-        # Red wraps around in HSV: [0-10] and [170-180]
-        self.hsv_h_ranges = hsv_h_ranges or [(0, 10), (170, 180)]
+        # HSV thresholds for a 650 nm red laser with fixed ColourGains=(1.8, 0.8).
+        # Tight hue bands around the red wrap-point; high S and V reject background
+        # objects that are merely reddish or dimly lit.
+        self.hsv_h_ranges = hsv_h_ranges or [(0, 8), (172, 180)]
         self.hsv_s_min = hsv_s_min
         self.hsv_v_min = hsv_v_min
         
-        # Initialize laser controller if pulsing enabled
+        # Use the shared PCA9685 if provided; otherwise create a standalone one.
+        # A shared instance avoids the frequency conflict that occurs when
+        # ServoController (50 Hz) and LaserController (formerly 1000 Hz) each
+        # instantiate their own PCA9685 at address 0x40.  LEDs only need
+        # duty_cycle 0x0000/0xFFFF so 50 Hz is perfectly adequate.
         self.laser_controller1 = None
         self.laser_controller2 = None
         if PCA9685_AVAILABLE:
             try:
-                self.laser_controller1 = LaserController(pca_channel=self.pca_channel1)
-                self.laser_controller2 = LaserController(pca_channel=self.pca_channel2)
+                if pca is None:
+                    _i2c = I2C(2)
+                    pca = PCA9685(_i2c, address=0x40)
+                    pca.frequency = 50
+                self.laser_controller1 = LaserController(pca=pca, pca_channel=self.pca_channel1)
+                self.laser_controller2 = LaserController(pca=pca, pca_channel=self.pca_channel2)
             except Exception as e:
                 print(f"[WARNING] Could not initialize laser controller: {e}")
         
@@ -164,42 +167,34 @@ class LaserDetector:
         return detections, debug_info
     
     def _detect_hsv(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
-        """HSV red thresholding + morphology."""
+        """HSV red thresholding + morphology with fixed camera exposure."""
         start_time = time.time()
-        
-        # Convert to HSV
+
+        if not self._exposure_locked and self.camera_capture is not None:
+            self.camera_capture.lock_exposure()
+            self._exposure_locked = True
+            time.sleep(0.1)
+
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        
-        # Debug: sample HSV and BGR values from center of frame to diagnose color issues
-        if self.frame_count % 30 == 0:  # Print every 30 frames
-            h, w = frame.shape[:2]
-            center_bgr = frame[h//2, w//2]
-            center_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[h//2, w//2]
-            print(f"[DEBUG] Center pixel BGR={center_bgr} HSV={center_hsv} | Frame: {self.frame_count}")
-        
-        # Create mask for red (two ranges due to HSV wrapping)
+
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
         for h_min, h_max in self.hsv_h_ranges:
             lower = np.array([h_min, self.hsv_s_min, self.hsv_v_min])
             upper = np.array([h_max, 255, 255])
             mask |= cv2.inRange(hsv, lower, upper)
-        
-        # Debug: show mask statistics
-        mask_pixels = np.count_nonzero(mask)
-        debug_info['mask_pixel_count'] = mask_pixels
-        
-        # Morphological operations to reduce noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+        debug_info['mask_pixel_count'] = np.count_nonzero(mask)
+
+        # (3,3) open removes 1-px noise without erasing 2-3 px laser dots.
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Find contours
+
         detections = self._contours_to_detections(mask, frame, hsv, debug_info)
-        
+
         debug_info['hsv_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
         debug_info['num_detections'] = len(detections)
-        
+
         return detections, debug_info
     
     def _detect_adaptive(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
@@ -236,38 +231,32 @@ class LaserDetector:
         return detections, debug_info
     
     def _detect_bgr(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
-        """BGR red thresholding - detect red in BGR color space directly."""
+        """BGR red thresholding with fixed camera exposure."""
         start_time = time.time()
-        
-        # Create mask for red in BGR space
-        # Red channel should be high, blue and green should be lower
-        # Also check that red is significantly higher than blue and green
+
+        if not self._exposure_locked and self.camera_capture is not None:
+            self.camera_capture.lock_exposure()
+            self._exposure_locked = True
+            time.sleep(0.1)
+
         b, g, r = cv2.split(frame)
-        
-        # Conditions for red detection in BGR:
-        # 1. Red channel is above threshold
-        # 2. Red is significantly higher than blue (r > b + threshold)
-        # 3. Red is significantly higher than green (r > g + threshold)
-        r_thresh = 100  # Minimum red value
-        diff_thresh = 30  # Red must be at least this much higher than B and G
-        
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        mask = ((r > r_thresh) & 
-                (r > b + diff_thresh) & 
+
+        r_thresh = 150   # minimum absolute red value
+        diff_thresh = 30  # red must exceed both B and G by this margin
+
+        mask = ((r > r_thresh) &
+                (r > b + diff_thresh) &
                 (r > g + diff_thresh)).astype(np.uint8) * 255
-        
-        # Morphological operations to reduce noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Find contours
+
         detections = self._contours_to_detections(mask, frame, None, debug_info)
-        
+
         debug_info['bgr_mask'] = mask
         debug_info['processing_time_ms'] = (time.time() - start_time) * 1000
         debug_info['num_detections'] = len(detections)
-        
+
         return detections, debug_info
     
     def _detect_temporal(self, frame: np.ndarray, debug_info: Dict) -> Tuple[List[Dict], Dict]:
@@ -417,14 +406,18 @@ class LaserDetector:
             debug_info['contours'] = contours
         
         for contour in contours:
-            # Filter by area (laser dots are typically 10-50 pixels)
-            area = cv2.contourArea(contour)
-            # Tightened: laser dots are small, reject large areas that are likely not lasers
-            if area < 1 or area > 200:
-                continue
-            
-            # Get bounding box
+            # Filter by effective radius from bounding box, NOT by cv2.contourArea.
+            # Reason: for a ring (annulus) contour, RETR_EXTERNAL returns only the outer
+            # boundary. cv2.contourArea on that boundary uses the shoelace formula and
+            # returns π*R² (the full disc area including the hole), which easily exceeds
+            # a pixel-count-based limit and causes all ring detections to be rejected.
+            # Bounding-box radius is immune to this and works for both filled circles
+            # and ring outer contours.
             x, y, w, h = cv2.boundingRect(contour)
+            r_eff = (w + h) / 4.0  # mean of half-width and half-height
+            if r_eff < 1.0 or r_eff > 35.0:  # ~2–70 px outer diameter
+                continue
+            area = cv2.contourArea(contour)
             
             # Get centroid
             M = cv2.moments(contour)
@@ -437,15 +430,13 @@ class LaserDetector:
             cx_int, cy_int = int(cx), int(cy)
             
             # Compute three confidence components
-            compactness_score = self._compute_compactness_score(area, w, h)
             circularity_score = self._compute_circularity(contour, area)
             red_saturation_score = self._compute_red_saturation_score(contour, frame, hsv, mask)
             
-            # Weighted confidence: compactness (30%), red saturation (50%), circularity (20%)
+            # Weighted confidence: red saturation (50%), circularity (50%)
             confidence = (
-                0.30 * compactness_score +
                 0.50 * red_saturation_score +
-                0.20 * circularity_score
+                0.50 * circularity_score
             )
             
             # Only keep detections with meaningful confidence
@@ -458,7 +449,7 @@ class LaserDetector:
                     if self.frame_count % 30 == 0 and len(detections) < 5:
                         det_hsv = hsv[cy_int, cx_int] if hsv is not None else [0, 0, 0]
                         print(f"[DEBUG] Detection at ({cx_int},{cy_int}): HSV={det_hsv}, BGR=({b},{g},{r})")
-                        print(f"  Scores: compact={compactness_score:.2f}, red_sat={red_saturation_score:.2f}, circ={circularity_score:.2f}, final={confidence:.2f}")
+                        print(f"  Scores: red_sat={red_saturation_score:.2f}, circ={circularity_score:.2f}, final={confidence:.2f}")
                 
                 detections.append({
                     'x': float(cx),
@@ -475,57 +466,31 @@ class LaserDetector:
         
         return detections
     
-    def _compute_compactness_score(self, area: float, bbox_width: float, bbox_height: float) -> float:
-        """
-        Compute compactness score: ratio of contour area to bounding box area.
-        
-        Higher = more compact/filled. Tolerates ellipses and moderate irregularities.
-        Range: [0, 1]
-        """
-        bbox_area = bbox_width * bbox_height
-        if bbox_area == 0:
-            return 0.0
-        compactness = area / bbox_area
-        return min(1.0, compactness)
-    
     def _compute_circularity(self, contour: np.ndarray, area: float) -> float:
-        """
-        Compute improved circularity based on solidity and aspect ratio.
-        
-        Better than simple isoperimetric quotient for:
-        - Donut shapes (red ring with white center)
-        - Ellipses (elongated blobs)
-        - Noisy contours (prevents perimeter inflation)
-        
+        """Circularity score via ISO quotient and bounding-box aspect ratio.
+
+        For a ring (annulus) contour: RETR_EXTERNAL returns the outer boundary,
+        a circle of radius R. cv2.contourArea (shoelace) = π*R², perimeter = 2π*R,
+        so ISO = 4π*(π*R²)/(2π*R)² = 1.0 — exactly what we want.
+
+        Solidity (area/hull_area) was previously used but is a no-op here: for any
+        approximately circular contour (filled disc OR ring outer boundary) both
+        areas equal π*R², so solidity is always ~1.0 and contributes nothing.
+
         Range: [0, 1]
         """
-        # Method 1: Solidity (area / convex hull area)
-        # Captures how "filled" the contour is, robust to noise
-        hull = cv2.convexHull(contour)
-        hull_area = cv2.contourArea(hull)
-        solidity = area / hull_area if hull_area > 0 else 0.0
-        
-        # Method 2: Aspect ratio penalty
-        # More circular shapes have aspect ratios close to 1
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = float(w) / h if h > 0 else 1.0
-        aspect_ratio = min(aspect_ratio, 1.0 / aspect_ratio)  # Normalize to [0, 1]
-        
-        # Isoperimetric quotient (weaker signal, but still useful)
         perimeter = cv2.arcLength(contour, True)
         if perimeter > 0:
-            iso_quotient = (4 * np.pi * area) / (perimeter ** 2)
+            # 4π*A/P² = 1.0 for a perfect circle, <1 for any deviation
+            iso = min(1.0, (4 * np.pi * area) / (perimeter ** 2))
         else:
-            iso_quotient = 0.5
-        
-        # Combined circularity: favor solidity and aspect ratio over perimeter
-        circularity = (
-            0.60 * solidity +      # Solidity: most important for handling donuts
-            0.25 * aspect_ratio +  # Aspect ratio: penalizes elongation
-            0.15 * min(1.0, iso_quotient)  # Perimeter-based: weakened due to noise sensitivity
-        )
-        
-        return min(1.0, circularity)
+            iso = 0.0
+
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect = min(float(w) / h, float(h) / w) if h > 0 else 1.0  # 1.0 = square/circular
+
+        # ISO is the primary discriminator; aspect penalises elongated noise blobs
+        return 0.75 * iso + 0.25 * aspect
     
     def _compute_red_saturation_score(self, contour: np.ndarray, frame: np.ndarray, 
                                      hsv: np.ndarray = None, mask: np.ndarray = None) -> float:
