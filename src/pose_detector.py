@@ -15,12 +15,12 @@ class PoseDetector:
     Computes 3D gaze direction using camera calibration.
     """
     
-    # Keypoint indices (from your 5-keypoint model)
-    LEFT_EYE = 0
-    RIGHT_EYE = 1
-    NOSE = 2
-    CHIN = 3
-    FOREHEAD = 4
+    # COCO 17-keypoint indices (yolov8-pose / yolov8s-pose from Hailo Model Zoo)
+    NOSE = 0
+    LEFT_EYE = 1
+    RIGHT_EYE = 2
+    LEFT_EAR = 3
+    RIGHT_EAR = 4
     
     def __init__(self, model_path: str = "yolo/yolo11n-pose.pt",
                  conf_threshold: float = 0.5,
@@ -28,16 +28,22 @@ class PoseDetector:
                  device: str = 'cpu'):
         """
         Initialize pose model.
-        
-        Args:
-            model_path: Path to trained YOLO11-pose weights
-            conf_threshold: Confidence threshold for detections
-            camera_matrix: 3x3 camera intrinsics matrix K
-                          If None, uses default RPi Camera v3 values
+
+        If model_path ends in '.hef', uses HailoPoseInferencer (hailo_platform)
+        instead of Ultralytics YOLO, bypassing CUDA device selection entirely.
         """
-        self.model = YOLO(model_path)
         self.conf_threshold = conf_threshold
         self.device = device
+        self._inferencer = None
+
+        if model_path.endswith('.hef'):
+            from .hailo_pose_inferencer import HailoPoseInferencer
+            self._inferencer = HailoPoseInferencer(model_path, conf_threshold=conf_threshold)
+            self.model = None
+            print(f"[POSE] Hailo NPU inference: {model_path}")
+        else:
+            self.model = YOLO(model_path)
+            print(f"[POSE] Ultralytics inference ({device}): {model_path}")
         
         # Default RPi Camera v3 (OV5647) intrinsics at 640x480
         # Should be calibrated using calibrate_camera() for your specific setup
@@ -57,49 +63,58 @@ class PoseDetector:
         
         self.last_detection = None
         
-    def detect(self, frame: np.ndarray, device: str = 'cpu') -> Optional[Dict]:
+    def detect(self, frame: np.ndarray) -> Optional[Dict]:
         """
         Run pose detection on frame.
 
         Args:
-            frame:  Input image (BGR, from RPi camera)
-            device: Inference device — 'cpu' for CPU, 'hailo:0' for Hailo-8L NPU
-                    (Hailo requires the model to be a compiled .hef file, not .pt)
+            frame: Input image (BGR, from RPi camera)
 
         Returns:
             {
                 'detected': bool,
                 'keypoints': {
+                    'nose': (x, y, conf),
                     'left_eye': (x, y, conf),
                     'right_eye': (x, y, conf),
-                    'nose': (x, y, conf),
-                    'chin': (x, y, conf),
-                    'forehead': (x, y, conf)
+                    'left_ear': (x, y, conf),
+                    'right_ear': (x, y, conf)
                 },
                 'face_box': (x_min, y_min, x_max, y_max),
                 'confidence': float
             }
         """
+        if self._inferencer is not None:
+            detection = self._inferencer.infer(frame)
+            self.last_detection = detection
+            return detection
+
         results = self.model(frame, device=self.device, verbose=False)
-        
+
         detection = {
             'detected': False,
             'keypoints': {},
             'face_box': None,
             'confidence': 0.0
         }
-        
+
         if len(results) == 0 or results[0].keypoints is None:
             self.last_detection = detection
             return detection
-        
+
         keypoints = results[0].keypoints.xy[0]  # First person detected
         kpt_conf = results[0].keypoints.conf[0]  # Confidences
-        
-        # Extract keypoints with confidence filtering
-        kpt_names = ['left_eye', 'right_eye', 'nose', 'chin', 'forehead']
-        for idx, name in enumerate(kpt_names):
-            if kpt_conf[idx] > self.conf_threshold:
+
+        # COCO 17-keypoint indices for the face region
+        face_kpt_map = {
+            'nose': self.NOSE,
+            'left_eye': self.LEFT_EYE,
+            'right_eye': self.RIGHT_EYE,
+            'left_ear': self.LEFT_EAR,
+            'right_ear': self.RIGHT_EAR,
+        }
+        for name, idx in face_kpt_map.items():
+            if idx < len(kpt_conf) and kpt_conf[idx] > self.conf_threshold:
                 x, y = keypoints[idx]
                 detection['keypoints'][name] = (float(x), float(y), float(kpt_conf[idx]))
         
@@ -224,31 +239,33 @@ class PoseDetector:
             return None
         
         kpts = detection['keypoints']
-        required = ['left_eye', 'right_eye', 'nose', 'chin', 'forehead']
+        # Requires left_ear + right_ear for roll/yaw estimation in COCO keypoint format.
+        # chin/forehead are not available; returns None if ears are missing.
+        required = ['left_eye', 'right_eye', 'nose', 'left_ear', 'right_ear']
         if not all(k in kpts for k in required):
             return None
         
-        # Extract pixel coordinates
+        # Extract pixel coordinates (COCO keypoints: eyes, nose, ears)
         u_left, v_left = kpts['left_eye'][:2]
         u_right, v_right = kpts['right_eye'][:2]
         u_nose, v_nose = kpts['nose'][:2]
-        u_chin, v_chin = kpts['chin'][:2]
-        u_forehead, v_forehead = kpts['forehead'][:2]
-        
+        u_left_ear, v_left_ear = kpts['left_ear'][:2]
+        u_right_ear, v_right_ear = kpts['right_ear'][:2]
+
         # Convert to normalized 3D rays using camera matrix
         ray_left = self.pixel_to_normalized_3d(u_left, v_left)
         ray_right = self.pixel_to_normalized_3d(u_right, v_right)
         ray_nose = self.pixel_to_normalized_3d(u_nose, v_nose)
-        ray_chin = self.pixel_to_normalized_3d(u_chin, v_chin)
-        ray_forehead = self.pixel_to_normalized_3d(u_forehead, v_forehead)
-        
-        # Compute face coordinate system
-        # Vector from nose to forehead (roughly pointing up on face)
-        face_up = ray_forehead - ray_nose
+        ray_left_ear = self.pixel_to_normalized_3d(u_left_ear, v_left_ear)
+        ray_right_ear = self.pixel_to_normalized_3d(u_right_ear, v_right_ear)
+
+        # Eye midpoint → nose gives a rough "down the face" direction (inverted = up)
+        eye_mid = (ray_left + ray_right) / 2
+        face_up = eye_mid - ray_nose
         face_up = face_up / (np.linalg.norm(face_up) + 1e-6)
-        
-        # Vector from left to right eye (roughly pointing right)
-        face_right = ray_right - ray_left
+
+        # Ear-to-ear vector approximates the face-right axis
+        face_right = ray_right_ear - ray_left_ear
         face_right = face_right / (np.linalg.norm(face_right) + 1e-6)
         
         # Face forward (cross product)
@@ -267,3 +284,7 @@ class PoseDetector:
         roll = np.arctan2(face_up[0], face_up[1]) * 180 / np.pi
         
         return (roll, pitch, yaw)
+
+    def close(self):
+        if self._inferencer is not None:
+            self._inferencer.close()

@@ -285,6 +285,7 @@ class LaserEyeControllerStreaming:
             self.laser_detector.laser_controller1.off()
         if self.laser_detector.laser_controller2:
             self.laser_detector.laser_controller2.off()
+        self.pose_detector.close()
         self.servo_controller.emergency_stop()
         cap.release()
         cv2.destroyAllWindows()

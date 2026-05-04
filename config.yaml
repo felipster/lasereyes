@@ -10,7 +10,7 @@ loop_rate_hz: 30  # Target update frequency (Hz)
 # Model Paths
 # ============================================================================
 models:
-  pose: "yolo/yolo11n-pose.pt"      # Trained 5-keypoint face detection model
+  pose: "/usr/share/hailo-models/yolov8s_pose_h8l_pi.hef"  # HAILO8L compiled HEF (COCO 17 keypoints)
 # ============================================================================
 # Camera Calibration
 # ============================================================================
@@ -71,7 +71,7 @@ detectors:
     # Inference device for the YOLO pose model.
     # 'cpu'     — ARM Cortex-A76 cores (always works, ~10-15 fps with yolo11n-pose)
     # 'hailo:0' — Hailo-8L NPU on the AI HAT+ (~30+ fps, requires a compiled .hef model)
-    device: 'cpu'
+    device: 'hailo:0'
   laser:
     method: "temporal"               # hsv | bgr | brightness | temporal | hybrid
     confidence_threshold: 0.5
